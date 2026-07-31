@@ -5,24 +5,39 @@ import { usePathname } from "next/navigation";
 
 export function Nav() {
   const pathname = usePathname();
+  const activePath =
+    pathname === "/" ? pathname : pathname.replace(/\/+$/, "");
 
   return (
     <nav className="top-nav" aria-label="Primary navigation">
       <Link className="nav-brand" href="/">
         <span className="nav-brand-name">SoverStore</span>
         <span className="nav-brand-tagline">
-          Built with Polkadot Bulletin primitives
+          A Polkadot Product - storage on the Bulletin Chain, signing on your
+          device
         </span>
       </Link>
       <div className="nav-links">
-        <Link className={pathname === "/" ? "active" : ""} href="/">
+        <Link className={activePath === "/" ? "active" : ""} href="/">
           Storage
         </Link>
         <Link
-          className={pathname === "/recovery" ? "active" : ""}
+          className={activePath === "/recovery" ? "active" : ""}
           href="/recovery"
         >
           Recovery
+        </Link>
+        <Link
+          className={activePath === "/drops" ? "active" : ""}
+          href="/drops"
+        >
+          Drops
+        </Link>
+        <Link
+          className={activePath === "/about" ? "active" : ""}
+          href="/about"
+        >
+          About
         </Link>
       </div>
     </nav>

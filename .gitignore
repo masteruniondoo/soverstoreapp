@@ -6,3 +6,4 @@ out/
 next-env.d.ts
 *.log
 Test/
+CONTEXT.md
