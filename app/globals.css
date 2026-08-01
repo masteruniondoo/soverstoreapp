@@ -411,6 +411,354 @@ code {
   color: var(--ink-60);
 }
 
+/* Private Drops application ----------------------------------------------- */
+
+.drops-page {
+  max-width: 940px;
+}
+
+.drops-toolbar,
+.drops-card .actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 28px;
+}
+
+.drops-identity {
+  margin: 20px 0 0;
+  color: var(--ink-60);
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.drops-owner-panel {
+  margin-top: 34px;
+  padding: 26px 28px;
+  border: 2px solid var(--ink);
+  border-radius: 14px;
+  background: var(--card);
+}
+
+.drops-owner-panel h2,
+.drops-owner-panel p {
+  margin: 0;
+}
+
+.drops-owner-panel p {
+  max-width: 62ch;
+  margin-top: 8px;
+  color: var(--ink-60);
+}
+
+.drops-owner-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(120px, 0.6fr) minmax(190px, 0.9fr);
+  gap: 14px;
+  align-items: end;
+  margin-top: 24px;
+}
+
+.drops-owner-form label,
+.drops-file-field {
+  color: var(--ink-60);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.drops-owner-form input,
+.drops-file-field input {
+  display: block;
+  width: 100%;
+  margin-top: 7px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 500;
+}
+
+.drops-owner-form .btn {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+
+.drops-public-note {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.55fr) minmax(0, 1.45fr);
+  gap: 24px;
+  margin: 34px 0;
+  padding: 22px 24px;
+  border-left: 3px solid var(--pink);
+  background: var(--card);
+}
+
+.drops-public-note span {
+  color: var(--ink-60);
+  line-height: 1.55;
+}
+
+.drops-error,
+.drops-open-error {
+  padding: 14px 16px;
+  border: 1px solid #d85b72;
+  border-radius: 10px;
+  background: #fff1f4;
+  color: #781f32;
+  overflow-wrap: anywhere;
+}
+
+.drops-list {
+  padding: 18px 0 60px;
+}
+
+.drops-list-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 24px;
+  padding-bottom: 18px;
+  border-bottom: 2px solid var(--ink);
+}
+
+.drops-list-heading .story-kicker {
+  display: block;
+  margin: 0 0 7px;
+}
+
+.drops-list-heading h2 {
+  margin: 0;
+  font-size: 28px;
+}
+
+.drops-list-heading > span,
+.drops-empty {
+  color: var(--ink-60);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.drops-empty {
+  padding: 42px 0;
+}
+
+.drops-card {
+  padding: 30px 0 34px;
+  border-bottom: 1px solid var(--line);
+}
+
+.drops-card-topline {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 18px;
+  color: var(--ink-60);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.drops-state {
+  padding: 6px 9px;
+  border-radius: 999px;
+  background: #eceef2;
+}
+
+.drops-state.sale {
+  background: #e6f7ed;
+  color: #176338;
+}
+
+.drops-state.published {
+  background: #ffe2ed;
+  color: var(--pink-deep);
+}
+
+.drops-card > h2 {
+  margin: 18px 0 20px;
+  font-size: clamp(25px, 5vw, 36px);
+  letter-spacing: -0.025em;
+}
+
+.drops-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--line);
+}
+
+.drops-facts div {
+  padding: 14px 16px;
+  background: var(--card);
+}
+
+.drops-facts dt,
+.drops-cid span {
+  color: var(--ink-60);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.drops-facts dd {
+  margin: 6px 0 0;
+  font-weight: 700;
+}
+
+.drops-card-message {
+  margin-top: 18px;
+  padding: 17px 19px;
+  border-radius: 10px;
+  background: var(--card);
+}
+
+.drops-card-message p {
+  margin: 5px 0 0;
+  color: var(--ink-60);
+}
+
+.drops-card-message .drops-buy-button {
+  margin-top: 16px;
+}
+
+.drops-card-message small {
+  display: block;
+  margin-top: 9px;
+  color: var(--ink-60);
+}
+
+.drops-card-message .drops-inline-danger {
+  color: #781f32;
+  font-weight: 700;
+}
+
+.drops-buy-success {
+  color: #176338 !important;
+  overflow-wrap: anywhere;
+}
+
+.drops-open-error p {
+  margin: 10px 0 0;
+}
+
+.drops-published {
+  margin-top: 20px;
+}
+
+.drops-publish-panel {
+  margin-top: 20px;
+  padding: 20px;
+  border: 1px solid var(--ink);
+  border-radius: 12px;
+  background: var(--card);
+}
+
+.drops-publish-panel .story-kicker {
+  display: block;
+  margin: 0 0 6px;
+}
+
+.drops-publish-panel h3 {
+  margin: 0 0 18px;
+  font-size: 20px;
+}
+
+.drops-file-field small,
+.drops-retry-cid small {
+  display: block;
+  margin-top: 8px;
+  color: var(--ink-60);
+  font-weight: 500;
+}
+
+.drops-retry-cid {
+  padding: 14px 16px;
+  border-left: 3px solid var(--pink);
+  background: var(--paper);
+}
+
+.drops-retry-cid code {
+  display: block;
+  margin-top: 7px;
+  overflow-wrap: anywhere;
+}
+
+.drops-cid {
+  padding: 15px 17px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+}
+
+.drops-cid span,
+.drops-cid code {
+  display: block;
+}
+
+.drops-cid code {
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+}
+
+.drops-open-status {
+  color: var(--ink-60);
+}
+
+.drops-document {
+  margin-top: 22px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+}
+
+.drops-document-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.drops-document-meta span {
+  color: var(--ink-60);
+  font-size: 12px;
+}
+
+.drops-document img,
+.drops-document iframe {
+  display: block;
+  width: 100%;
+  max-height: 520px;
+  margin-bottom: 16px;
+  border: 0;
+  object-fit: contain;
+}
+
+.drops-document iframe {
+  min-height: 460px;
+}
+
+.drops-document pre {
+  max-height: 420px;
+  margin: 0 0 16px;
+  padding: 14px;
+  overflow: auto;
+  border-radius: 8px;
+  background: var(--paper);
+  white-space: pre-wrap;
+}
+
 @media (max-width: 640px) {
   .story-hero {
     padding-top: 20px;
@@ -439,6 +787,18 @@ code {
   }
 
   .story-actions {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .drops-public-note,
+  .drops-facts,
+  .drops-owner-form {
+    grid-template-columns: 1fr;
+  }
+
+  .drops-list-heading,
+  .drops-document-meta {
     align-items: flex-start;
     flex-direction: column;
   }
