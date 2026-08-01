@@ -134,6 +134,11 @@ Release `0.1.34` validation coverage:
   legacy Storage save-and-recover cycle. Finalization proceeded with project
   owner approval after the covered runtime paths passed.
 
+Final release deployment completed on 2026-08-01. The executable manifest was
+verified on-chain as `{"$v":1,"kind":"app","appVersion":[0,1,34]}` in
+transaction
+`0xc9f3619568d0caa4c5ac54898a9069af880c9152c2128171e545806c378ef479`.
+
 ### Drops operating procedure
 
 1. Open `Drops` in the deployed Product and connect the app-scoped owner wallet.
