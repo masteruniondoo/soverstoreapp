@@ -31,15 +31,11 @@ async function queryOnce(
 ): Promise<AuthorizationStorageResult> {
   const { api } = await getBulletin();
   const controller = new AbortController();
-  const timer = setTimeout(
-    () =>
-      controller.abort(
-        new Error(
-          `Bulletin authorization query timed out after ${DIRECT_QUERY_TIMEOUT_MS}ms.`,
-        ),
-      ),
-    DIRECT_QUERY_TIMEOUT_MS,
-  );
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, DIRECT_QUERY_TIMEOUT_MS);
   try {
     const [authorization, currentBlock] = await Promise.all([
       api.query.TransactionStorage.Authorizations.getValue(
@@ -53,6 +49,18 @@ async function queryOnce(
         : Promise.resolve(undefined),
     ]);
     return { authorization, currentBlock };
+  } catch (error) {
+    // PAPI rejects an aborted query with its own generic AbortError, whose
+    // message ("Abort Error") does not describe what happened and cannot be
+    // recognized by recovery.ts's stale-transport detection. Replace it with
+    // our own message so both the UI and the recovery path see a clear,
+    // matchable cause instead of a silent dead end.
+    if (timedOut) {
+      throw new Error(
+        `Bulletin authorization query timed out after ${DIRECT_QUERY_TIMEOUT_MS}ms.`,
+      );
+    }
+    throw error;
   } finally {
     clearTimeout(timer);
   }
