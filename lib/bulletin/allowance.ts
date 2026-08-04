@@ -1,23 +1,12 @@
-import {
-  AsyncBulletinClient,
-  TxStatus,
-  WaitFor,
-  type ProgressEvent,
-} from "@parity/bulletin-sdk";
-import { SignerManager } from "@parity/product-sdk/wallet";
-import { getBulletin } from "./client";
+import { ensureBulletinAllowance } from "@/lib/wallet";
+import { queryAccountAuthorization } from "./authorization-query";
+import { clearBulletinTransportRecovery } from "./recovery";
+import type { StoreAuthorization } from "./store";
 
-/** The allowance this app requests: 100 transactions, 10 MB. */
-export const GRANT_TRANSACTIONS = 100;
-export const GRANT_BYTES = 10n * 1024n * 1024n;
-
-export interface Allowance {
-  remainingTransactions: bigint;
-  remainingBytes: bigint;
-  expiresAtBlock?: number;
-  /** True when the finalized block has reached the expiration block. */
-  expired: boolean;
-}
+const AUTHORIZATION_CONFIRM_ATTEMPTS = 12;
+const AUTHORIZATION_CONFIRM_DELAY_MS = 1_000;
+const readinessChecks = new Map<string, Promise<Allowance>>();
+const allowanceLookups = new Map<string, Promise<Allowance | null>>();
 
 type AuthorizationRecord = {
   extent?: {
@@ -26,175 +15,206 @@ type AuthorizationRecord = {
     bytes?: string | number | bigint;
     bytes_allowance?: string | number | bigint;
   };
-  expiration?: number;
+  expiration: string | number | bigint;
 };
 
-/**
- * Newer runtimes report a cap (`*_allowance`) next to consumed counters;
- * older ones report the remainder directly. Handle both.
- */
+export interface Allowance {
+  remainingTransactions: bigint;
+  remainingBytes: bigint;
+  expiresAtBlock?: number;
+  remainingBlocks?: number;
+  /** True when the observed chain head has reached the expiration block. */
+  expired: boolean;
+  exhausted: boolean;
+  /** True only while the grant is live and both quotas are positive. */
+  usable: boolean;
+}
+
 function remaining(used: unknown, allowance: unknown): bigint {
-  if (allowance != null) {
-    const cap = BigInt(allowance as string | number | bigint);
-    const spent = BigInt((used as string | number | bigint) ?? 0);
-    return cap > spent ? cap - spent : 0n;
+  if (allowance == null) {
+    return BigInt((used as string | number | bigint | undefined) ?? 0);
   }
-  return BigInt((used as string | number | bigint) ?? 0);
-}
-
-function withTimeout<T>(
-  promise: Promise<T>,
-  ms: number,
-  label: string,
-): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error(`${label} timed out after ${ms}ms`));
-    }, ms);
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error: unknown) => {
-        clearTimeout(timer);
-        reject(error);
-      },
-    );
-  });
-}
-
-function normalizeAuthorization(value: unknown): AuthorizationRecord | null {
-  if (value == null) return null;
-
-  const option = value as {
-    isNone?: boolean;
-    isSome?: boolean;
-    unwrap?: () => unknown;
-    toJSON?: () => unknown;
-  };
-
-  if (option.isNone) return null;
-  if (option.isSome && typeof option.unwrap === "function") {
-    return normalizeAuthorization(option.unwrap());
-  }
-  if (typeof option.toJSON === "function") {
-    return normalizeAuthorization(option.toJSON());
-  }
-
-  return value as AuthorizationRecord;
-}
-
-async function readAuthorization(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  api: any,
-  address: string,
-): Promise<AuthorizationRecord | null> {
-  const query = api.query as any;
-
-  if (typeof query?.transactionStorage?.authorizations === "function") {
-    const authorization = await query.transactionStorage.authorizations({
-      account: address,
-    });
-    return normalizeAuthorization(authorization);
-  }
-
-  const authorization =
-    await query.TransactionStorage.Authorizations.getValue({
-      type: "Account",
-      value: address,
-    });
-  return normalizeAuthorization(authorization);
+  const cap = BigInt(allowance as string | number | bigint);
+  const spent = BigInt((used as string | number | bigint | undefined) ?? 0);
+  return cap > spent ? cap - spent : 0n;
 }
 
 /**
- * Reads `transactionStorage.authorizations` for the account. Returns `null`
- * when the account holds no authorization on the Bulletin Chain.
+ * Mirrors Bulletin Dashboard's "Lookup Account": one direct
+ * TransactionStorage.Authorizations(Account(address)) read. The optional
+ * liveness read is deliberately separate so a slow System.Number query never
+ * hides an authorization record that the account lookup already returned.
  */
-export async function fetchAllowance(
+async function performAllowanceLookup(
   address: string,
+  includeLiveness: boolean,
 ): Promise<Allowance | null> {
-  const { api, client } = await getBulletin();
-  const auth = await withTimeout(
-    readAuthorization(api, address),
-    10_000,
-    "Authorization check",
+  console.info("[soverstore:bulletin] Lookup Account started", {
+    address,
+    includeLiveness,
+  });
+  const { authorization, currentBlock } = await queryAccountAuthorization(
+    address,
+    includeLiveness,
   );
-  if (auth == null) return null;
-  const extent = auth.extent ?? {};
-  const expiresAtBlock: number | undefined = auth.expiration ?? undefined;
-  const finalized =
-    expiresAtBlock == null
-      ? null
-      : await withTimeout(
-          client.getFinalizedBlock(),
-          8_000,
-          "Block check",
-        ).catch(() => null);
-  return {
-    remainingTransactions: remaining(
-      extent.transactions,
-      extent.transactions_allowance,
-    ),
-    remainingBytes: remaining(extent.bytes, extent.bytes_allowance),
-    expiresAtBlock,
-    expired:
-      expiresAtBlock != null &&
-      finalized != null &&
-      finalized.number >= expiresAtBlock,
+  // A successful storage response proves that the fresh host transport works.
+  clearBulletinTransportRecovery();
+  if (!authorization) {
+    console.info("[soverstore:bulletin] Lookup Account completed: not authorized", {
+      address,
+    });
+    return null;
+  }
+
+  const extent = authorization.extent ?? {};
+  const remainingTransactions = remaining(
+    extent.transactions,
+    extent.transactions_allowance,
+  );
+  const remainingBytes = remaining(
+    extent.bytes,
+    extent.bytes_allowance,
+  );
+  const expiration = Number(authorization.expiration);
+  let remainingBlocks: number | undefined;
+  let expired = false;
+  if (includeLiveness) {
+    if (currentBlock === undefined) {
+      throw new Error("Bulletin did not return its current block number.");
+    }
+    remainingBlocks = Math.max(0, expiration - currentBlock);
+    expired = currentBlock >= expiration;
+  }
+  const exhausted =
+    !expired && (remainingTransactions === 0n || remainingBytes === 0n);
+  const allowance = {
+    remainingTransactions,
+    remainingBytes,
+    expiresAtBlock: expiration,
+    remainingBlocks,
+    expired,
+    exhausted,
+    usable: !expired && !exhausted,
   };
+  console.info("[soverstore:bulletin] Lookup Account completed: authorized", {
+    address,
+    remainingTransactions: remainingTransactions.toString(),
+    remainingBytes: remainingBytes.toString(),
+    expiration,
+    usable: allowance.usable,
+  });
+  return allowance;
+}
+
+export function fetchAllowance(
+  address: string,
+  includeLiveness = false,
+  force = false,
+): Promise<Allowance | null> {
+  const key = `${address}:${includeLiveness ? "live" : "lookup"}`;
+  const existing = allowanceLookups.get(key);
+  if (existing && !force) return existing;
+
+  const pending = performAllowanceLookup(address, includeLiveness).finally(() => {
+    if (allowanceLookups.get(key) === pending) allowanceLookups.delete(key);
+  });
+  allowanceLookups.set(key, pending);
+  return pending;
 }
 
 /**
- * Requests a storage allowance for `address` from the TestNet faucet.
- *
- * The Bulletin Chain has no balances: storage access is granted through
- * `transactionStorage.authorize_account`, which only registered authorizers
- * may call. On the Paseo TestNet the well-known dev account `//Eve` is such
- * an authorizer, matching the official Bulletin Console. TestNet only.
+ * Requests the host-managed Bulletin allowance and does not report success
+ * until the grant is visible and usable on the chain. This replaces the old
+ * second, in-app Eve faucet flow with the Product host's single resource path.
  */
 export async function requestAllowance(
   address: string,
   onProgress: (message: string) => void,
-): Promise<void> {
-  onProgress("Preparing faucet signer...");
-  const faucetManager = new SignerManager({ persistence: null });
-  const connected = await faucetManager.connect("dev");
-  if (!connected.ok) throw connected.error;
+  minimum?: StoreAuthorization,
+): Promise<Allowance> {
+  onProgress("Requesting Bulletin storage allowance from the Product host...");
+  await ensureBulletinAllowance();
+  onProgress("Allowance allocated. Waiting for on-chain confirmation...");
 
-  const faucet = connected.value.find((account) => account.name === "Eve");
-  if (!faucet) throw new Error("Devnet faucet account Eve is unavailable.");
-
-  const selected = faucetManager.selectAccount(faucet.address);
-  if (!selected.ok) throw selected.error;
-
-  const faucetSigner = faucetManager.getSigner();
-  if (!faucetSigner) throw new Error("Devnet faucet signer is unavailable.");
-
-  const { api, client } = await getBulletin();
-  const sdk = new AsyncBulletinClient(api, faucetSigner, client.submit);
-
-  onProgress("Submitting authorization...");
-  await sdk
-    .authorizeAccount(address, GRANT_TRANSACTIONS, GRANT_BYTES)
-    .withCallback((event: ProgressEvent) => {
-      switch (event.type) {
-        case TxStatus.Signed:
-          onProgress("Transaction signed...");
-          break;
-        case TxStatus.Broadcasted:
-          onProgress("Broadcasting to the network...");
-          break;
-        case TxStatus.InBlock:
-          onProgress(
-            `Included in block #${(event as { blockNumber?: number }).blockNumber ?? "..."}`,
-          );
-          break;
-        case TxStatus.Finalized:
-          onProgress("Finalized");
-          break;
+  let lastError: unknown;
+  let lastAllowance: Allowance | null = null;
+  for (let attempt = 1; attempt <= AUTHORIZATION_CONFIRM_ATTEMPTS; attempt += 1) {
+    try {
+      const allowance = await fetchAllowance(address);
+      lastError = undefined;
+      lastAllowance = allowance;
+      if (
+        allowance?.usable &&
+        (!minimum ||
+          (allowance.remainingTransactions >= minimum.transactions &&
+            allowance.remainingBytes >= minimum.bytes))
+      ) {
+        return allowance;
       }
-    })
-    .withWaitFor(WaitFor.Finalized)
-    .send();
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt < AUTHORIZATION_CONFIRM_ATTEMPTS) {
+      onProgress(
+        `Waiting for Bulletin confirmation (${attempt}/${AUTHORIZATION_CONFIRM_ATTEMPTS})...`,
+      );
+      await new Promise((resolve) =>
+        setTimeout(resolve, AUTHORIZATION_CONFIRM_DELAY_MS),
+      );
+    }
+  }
+
+  if (lastError instanceof Error) throw lastError;
+  if (lastAllowance?.usable && minimum) {
+    throw new Error(
+      `The host allowance is active but too small: ${lastAllowance.remainingBytes} bytes and ${lastAllowance.remainingTransactions} transaction(s) remain; this upload needs ${minimum.bytes} bytes and ${minimum.transactions} transaction(s).`,
+    );
+  }
+  throw new Error(
+    "The host allocated Bulletin storage, but the usable on-chain allowance was not visible yet. Retry the authorization check.",
+  );
+}
+
+function satisfiesMinimum(
+  allowance: Allowance,
+  minimum?: StoreAuthorization,
+): boolean {
+  return (
+    allowance.usable &&
+    (!minimum ||
+      (allowance.remainingTransactions >= minimum.transactions &&
+        allowance.remainingBytes >= minimum.bytes))
+  );
+}
+
+/**
+ * One shared connect-time flow for Storage and Drops publishers. Existing
+ * usable quota is preserved; host allocation is requested only when it is
+ * actually missing, expired, exhausted, or too small.
+ */
+export function ensureAccountBulletinReady(
+  address: string,
+  onProgress: (message: string) => void,
+  minimum?: StoreAuthorization,
+): Promise<Allowance> {
+  const key = `${address}:${minimum?.transactions ?? 0n}:${minimum?.bytes ?? 0n}`;
+  const existing = readinessChecks.get(key);
+  if (existing) return existing;
+
+  const pending = (async () => {
+    onProgress("Looking up this account on Bulletin...");
+    const current = await fetchAllowance(address);
+    if (current && satisfiesMinimum(current, minimum)) {
+      // This is intentionally the same single-address lookup as Bulletin
+      // Dashboard's "Lookup Account" action. Expiration height is checked only
+      // immediately before an upload, where the additional read is relevant.
+      onProgress("Existing Bulletin authorization is ready.");
+      return current;
+    }
+    return requestAllowance(address, onProgress, minimum);
+  })().finally(() => {
+    if (readinessChecks.get(key) === pending) readinessChecks.delete(key);
+  });
+  readinessChecks.set(key, pending);
+  return pending;
 }

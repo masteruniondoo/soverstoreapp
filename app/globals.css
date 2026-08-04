@@ -14,8 +14,8 @@
   --pink: #e6007a;
   --pink-deep: #b8005f;
 
-  --font-display: "Archivo", system-ui, sans-serif;
-  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --font-display: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", "Segoe UI Mono", monospace;
 }
 
 * {
@@ -453,6 +453,36 @@ code {
   color: var(--ink-60);
 }
 
+.drops-bulletin-status {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 18px;
+  margin-top: 22px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+}
+
+.drops-bulletin-status > div {
+  display: grid;
+  gap: 4px;
+}
+
+.drops-bulletin-status span {
+  color: var(--ink-60);
+  font-size: 13px;
+}
+
+.drops-bulletin-status.is-error {
+  border-color: var(--red);
+}
+
+.drops-bulletin-status .btn {
+  flex: 0 0 auto;
+}
+
 .drops-owner-form {
   display: grid;
   grid-template-columns: minmax(0, 1.4fr) minmax(120px, 0.6fr) minmax(190px, 0.9fr);
@@ -801,6 +831,15 @@ code {
   .drops-document-meta {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .drops-bulletin-status {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .drops-bulletin-status .btn {
+    width: 100%;
   }
 }
 
@@ -1698,4 +1737,8 @@ code {
     transition: none;
     transform: none;
   }
+}
+.wallet-connected-badge {
+  cursor: default;
+  user-select: text;
 }

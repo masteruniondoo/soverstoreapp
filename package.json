@@ -1,6 +1,6 @@
 {
   "name": "soverstore",
-  "version": "0.1.33",
+  "version": "0.1.54",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -9,8 +9,10 @@
   },
   "dependencies": {
     "@parity/bulletin-sdk": "^0.3.0",
-    "@parity/product-sdk": "^0.19.1",
+    "@parity/product-sdk": "0.19.1",
     "@parity/product-sdk-descriptors": "^0.8.0",
+    "@parity/product-sdk-tx": "0.3.2",
+    "@parity/truapi": "0.5.1",
     "@polkadot/keyring": "^14.0.3",
     "@polkadot/util-crypto": "^14.0.1",
     "jsqr": "^1.4.0",

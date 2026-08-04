@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { AppSessionProvider } from "@/components/AppSessionProvider";
 import { ChunkLoadRecovery } from "@/components/ChunkLoadRecovery";
 import "./globals.css";
 
@@ -13,21 +14,9 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
-      <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link
-          rel="preconnect"
-          href="https://fonts.gstatic.com"
-          crossOrigin="anonymous"
-        />
-        <link
-          href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;500;700&display=swap"
-          rel="stylesheet"
-        />
-      </head>
       <body>
         <ChunkLoadRecovery />
-        {children}
+        <AppSessionProvider>{children}</AppSessionProvider>
       </body>
     </html>
   );

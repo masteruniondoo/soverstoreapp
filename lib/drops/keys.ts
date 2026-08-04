@@ -10,12 +10,19 @@ import {
 
 export const DROPS_ENCRYPTION_KEY_STORAGE_KEY =
   "soverstore.drops.enckey.v1";
+export const DROPS_ENCRYPTION_KEYRING_STORAGE_KEY =
+  "soverstore.drops.keyring.v2";
 
 export type StoredDropsEncryptionKey = {
   v: 1;
   publicKeyRaw: string;
   privateKeyJwk: JsonWebKey;
   createdAt: string;
+};
+
+type StoredDropsEncryptionKeyring = {
+  v: 2;
+  accounts: Record<string, StoredDropsEncryptionKey[]>;
 };
 
 export type DropsEncryptionKey = DropsEncryptionKeyPair & {
@@ -49,6 +56,14 @@ function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
     difference |= left[index] ^ right[index];
   }
   return difference === 0;
+}
+
+function normalizeAccount(account: string): string {
+  const normalized = account.trim().toLowerCase();
+  if (!normalized) {
+    throw new DropsKeyStorageError("A wallet account is required for Drops key storage.");
+  }
+  return normalized;
 }
 
 function parseStoredKey(value: unknown): DropsEncryptionKey {
@@ -113,6 +128,90 @@ async function resolveStore(store?: LocalKvStore): Promise<LocalKvStore> {
   return store ?? createLocalKvStore();
 }
 
+function toStoredKey(key: DropsEncryptionKey): StoredDropsEncryptionKey {
+  return {
+    v: 1,
+    publicKeyRaw: bytesToBase64(key.publicKeyRaw),
+    privateKeyJwk: key.privateKeyJwk,
+    createdAt: key.createdAt,
+  };
+}
+
+async function loadKeyring(
+  store: LocalKvStore,
+): Promise<Record<string, DropsEncryptionKey[]>> {
+  const stored = await store.getJSON<unknown>(
+    DROPS_ENCRYPTION_KEYRING_STORAGE_KEY,
+  );
+  if (stored === null) return {};
+  if (!isRecord(stored) || stored.v !== 2 || !isRecord(stored.accounts)) {
+    throw new DropsKeyStorageError("The stored Drops keyring has an unsupported format.");
+  }
+
+  const accounts: Record<string, DropsEncryptionKey[]> = {};
+  for (const [account, values] of Object.entries(stored.accounts)) {
+    if (!Array.isArray(values)) {
+      throw new DropsKeyStorageError("The stored Drops keyring is incomplete.");
+    }
+    const keys = values.map(parseStoredKey);
+    const unique = keys.filter((key, index) =>
+      keys.findIndex((candidate) =>
+        bytesEqual(candidate.publicKeyRaw, key.publicKeyRaw),
+      ) === index,
+    );
+    accounts[normalizeAccount(account)] = unique;
+  }
+  return accounts;
+}
+
+async function saveKeyring(
+  store: LocalKvStore,
+  accounts: Record<string, DropsEncryptionKey[]>,
+): Promise<void> {
+  const stored: StoredDropsEncryptionKeyring = {
+    v: 2,
+    accounts: Object.fromEntries(
+      Object.entries(accounts).map(([account, keys]) => [
+        normalizeAccount(account),
+        keys.map(toStoredKey),
+      ]),
+    ),
+  };
+  await store.setJSON(DROPS_ENCRYPTION_KEYRING_STORAGE_KEY, stored);
+
+  // A fresh host-store read catches transient or incompatible storage routes
+  // before a purchase is submitted with a key that was not actually retained.
+  const verified = await loadKeyring(store);
+  for (const [account, keys] of Object.entries(accounts)) {
+    const persisted = verified[normalizeAccount(account)] ?? [];
+    for (const key of keys) {
+      if (!persisted.some((candidate) =>
+        bytesEqual(candidate.publicKeyRaw, key.publicKeyRaw),
+      )) {
+        throw new DropsKeyStorageError(
+          "The host did not persist the complete Drops keyring.",
+        );
+      }
+    }
+  }
+}
+
+async function appendKey(
+  store: LocalKvStore,
+  account: string,
+  key: DropsEncryptionKey,
+): Promise<void> {
+  const normalized = normalizeAccount(account);
+  const accounts = await loadKeyring(store);
+  const keys = accounts[normalized] ?? [];
+  if (!keys.some((candidate) =>
+    bytesEqual(candidate.publicKeyRaw, key.publicKeyRaw),
+  )) {
+    accounts[normalized] = [...keys, key];
+    await saveKeyring(store, accounts);
+  }
+}
+
 export async function loadDropsEncryptionKey(
   store?: LocalKvStore,
 ): Promise<DropsEncryptionKey | null> {
@@ -125,42 +224,70 @@ export async function loadDropsEncryptionKey(
 
 async function createAndStoreDropsEncryptionKey(
   store: LocalKvStore,
+  account: string,
 ): Promise<DropsEncryptionKey> {
   const generated = await generateDropsEncryptionKeyPair();
   const createdAt = new Date().toISOString();
-  const stored: StoredDropsEncryptionKey = {
-    v: 1,
-    publicKeyRaw: bytesToBase64(generated.publicKeyRaw),
+  const key: DropsEncryptionKey = {
+    publicKeyRaw: generated.publicKeyRaw,
     privateKeyJwk: generated.privateKeyJwk,
     createdAt,
   };
-  await store.setJSON(DROPS_ENCRYPTION_KEY_STORAGE_KEY, stored);
+  await appendKey(store, account, key);
+  return key;
+}
 
-  const readBack = await store.getJSON<unknown>(
-    DROPS_ENCRYPTION_KEY_STORAGE_KEY,
+export async function loadDropsEncryptionKeyForPublicKey(
+  account: string,
+  registeredPublicKey: Uint8Array,
+  store?: LocalKvStore,
+): Promise<DropsEncryptionKey | null> {
+  const localStore = await resolveStore(store);
+  const normalized = normalizeAccount(account);
+  const accounts = await loadKeyring(localStore);
+  const matching = (accounts[normalized] ?? []).find((key) =>
+    bytesEqual(key.publicKeyRaw, registeredPublicKey),
   );
-  if (readBack === null) {
-    throw new DropsKeyStorageError("The host did not persist the Drops encryption key.");
+  if (matching) return matching;
+
+  // v1 stored one global key. Migrate it only after the contract proves which
+  // account and purchase it belongs to; never guess when several accounts are used.
+  const legacy = await loadDropsEncryptionKey(localStore);
+  if (legacy && bytesEqual(legacy.publicKeyRaw, registeredPublicKey)) {
+    await appendKey(localStore, normalized, legacy);
+    return legacy;
   }
-  const verified = parseStoredKey(readBack);
-  if (!bytesEqual(verified.publicKeyRaw, generated.publicKeyRaw)) {
-    throw new DropsKeyStorageError("The host persisted a different Drops encryption key.");
-  }
-  return verified;
+  return null;
 }
 
 export async function loadOrCreateDropsEncryptionKey(
+  account: string,
   alreadyBuyer: boolean,
+  registeredPublicKey?: Uint8Array,
   store?: LocalKvStore,
 ): Promise<DropsKeyResolution> {
   const localStore = await resolveStore(store);
-  const existing = await loadDropsEncryptionKey(localStore);
+
+  if (alreadyBuyer) {
+    if (!registeredPublicKey) return { status: "missing-paid-key" };
+    const matching = await loadDropsEncryptionKeyForPublicKey(
+      account,
+      registeredPublicKey,
+      localStore,
+    );
+    return matching
+      ? { status: "available", key: matching, created: false }
+      : { status: "missing-paid-key" };
+  }
+
+  const normalized = normalizeAccount(account);
+  const accounts = await loadKeyring(localStore);
+  const accountKeys = accounts[normalized] ?? [];
+  const existing = accountKeys[accountKeys.length - 1];
   if (existing) return { status: "available", key: existing, created: false };
 
-  // A paid on-chain buyer with no local record has permanently lost this key.
-  // Never replace it: the contract envelope was encrypted to the missing key.
-  if (alreadyBuyer) return { status: "missing-paid-key" };
-
-  const created = await createAndStoreDropsEncryptionKey(localStore);
+  // A new account gets its own key. The legacy global key is intentionally not
+  // guessed here; it is migrated only when it matches a real on-chain purchase.
+  const created = await createAndStoreDropsEncryptionKey(localStore, normalized);
   return { status: "available", key: created, created: true };
 }

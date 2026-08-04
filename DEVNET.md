@@ -146,10 +146,14 @@ transaction
    deadline. The actual file name remains inside the encrypted PRFY1 payload.
 3. Before the deadline, buyers press **Buy access**, acknowledge that the local
    encryption key is device-bound, and approve the native signing request.
-4. After the deadline, the owner selects one file and presses **Publish file**.
-5. If storage authorization is missing, press **Authorize Devnet storage**, wait
-   for finalization, and press **Publish file** again.
-6. Approve the Bulletin upload, each envelope batch, and the final publish
+4. The owner panel continuously shows the on-chain Bulletin transaction quota,
+   byte quota, and expiry. A full page refresh is not required after allocation.
+5. If the panel reports missing, expired, exhausted, or insufficient storage,
+   press **Request Bulletin allowance** and wait until the application itself
+   reports **Bulletin ready**. After the deadline, select one file and press
+   **Publish file**.
+6. Approve the Bulletin upload (and each chunk for a larger file), each envelope
+   batch, and the final publish
    transaction. Do not reload after upload while envelope or publish work is in
    progress: the content key is intentionally held only in memory.
 7. If a post-upload transaction fails, retain the displayed CID and use
@@ -187,7 +191,7 @@ dotns account address
 Save the mnemonic in a password manager. Never print it in logs, paste it into
 chat, or save it in this project.
 
-The displayed account requires:
+The displayed deployment account requires:
 
 1. PAS on Paseo Asset Hub (para 1000) for fees.
 2. An EVM mapping:
@@ -196,7 +200,10 @@ The displayed account requires:
    dotns account map --env devnet
    ```
 
-3. An active Products Devnet Bulletin storage authorization.
+Bulletin storage authorization is separate from this deployment account. At
+runtime the Product host allocates it to the app-scoped `soverstore.dot`
+account; Storage and Drops then track its on-chain quota and expiry
+automatically.
 
 Confirm the name and owner:
 
@@ -236,7 +243,7 @@ All three commands must return `True`.
 Use the account that owns `soverstore.dot`:
 
 ```powershell
-pad ./out soverstore.dot --env devnet --mnemonic $env:MNEMONIC --config ./polkadot-app-deploy.config.ts
+pad.cmd ./out soverstore.dot --env devnet --mnemonic $env:MNEMONIC --config ./polkadot-app-deploy.config.ts
 ```
 
 The `--env devnet` option is mandatory. Publishing the application bundle does
@@ -246,7 +253,7 @@ on Products Devnet Bulletin.
 Optional Browse listing, which may require proof of personhood:
 
 ```powershell
-pad ./out soverstore.dot --env devnet --mnemonic $env:MNEMONIC --config ./polkadot-app-deploy.config.ts --publish
+pad.cmd ./out soverstore.dot --env devnet --mnemonic $env:MNEMONIC --config ./polkadot-app-deploy.config.ts --publish
 ```
 
 Failure of the optional listing step does not invalidate a successful

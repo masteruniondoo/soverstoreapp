@@ -7,7 +7,11 @@ import {
   type AbiEntry,
 } from "@parity/product-sdk/contracts";
 import { devnet_asset_hub } from "@parity/product-sdk-descriptors/devnet-asset-hub";
-import type { AppWalletAccount } from "@/lib/wallet";
+import {
+  ensureSmartContractAllowance,
+  ensureTransactionSigningPermission,
+  type AppWalletAccount,
+} from "@/lib/wallet";
 
 export const DROPS_PACKAGE = "@soverstore/drops";
 export const DROPS_CONTRACT_ADDRESS =
@@ -325,6 +329,10 @@ export async function createDropsContractClient(
 ): Promise<DropsContractClient> {
   const contractRuntime = await runtime();
   if (account) {
+    // Resource allocation belongs to contract actions, not wallet connection:
+    // hosts that cannot allocate must not prevent the user from connecting.
+    await ensureSmartContractAllowance();
+    await ensureTransactionSigningPermission();
     const mapped = await ensureContractAccountMapped(
       contractRuntime,
       account.address,

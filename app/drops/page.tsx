@@ -3,6 +3,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MAX_FILE_SIZE } from "@parity/bulletin-sdk";
 import { ss58ToH160 } from "@parity/product-sdk/address";
+import { useAppSession } from "@/components/AppSessionProvider";
+import {
+  isBulletinTransportTimeout,
+  recoverTimedOutBulletinTransport,
+} from "@/lib/bulletin/recovery";
 import { Nav } from "@/components/Nav";
 import {
   buildHeader,
@@ -14,15 +19,12 @@ import {
   type ProofyInnerMeta,
 } from "@/lib/blob/format";
 import {
-  fetchAllowance,
-  requestAllowance,
+  estimateStoreAuthorization,
+  ensureAccountBulletinReady,
   storeBlob,
-  type Allowance,
+  type StoreAuthorization,
 } from "@/lib/bulletin";
-import {
-  BULLETIN_IPFS_GATEWAY,
-  fetchBlobByCid,
-} from "@/lib/bulletin/retrieve";
+import { fetchBlobByCid } from "@/lib/bulletin/retrieve";
 import { aesGcmDecrypt, aesGcmEncrypt } from "@/lib/crypto/aes";
 import { base64ToBytes } from "@/lib/crypto/hash";
 import { randomBytes } from "@/lib/crypto/random";
@@ -42,7 +44,7 @@ import {
   type DropsContractClient,
 } from "@/lib/drops/contract";
 import {
-  loadDropsEncryptionKey,
+  loadDropsEncryptionKeyForPublicKey,
   loadOrCreateDropsEncryptionKey,
 } from "@/lib/drops/keys";
 import {
@@ -51,16 +53,12 @@ import {
   downloadDocument,
   type RecoveredDocument,
 } from "@/lib/recovered-document";
-import {
-  connectHostWallet,
-  type AppWalletAccount,
-} from "@/lib/wallet";
-import { formatBytes } from "@/lib/format";
+import { formatBytes, formatNumber } from "@/lib/format";
 
 type OpenState =
   | { status: "idle" }
   | { status: "loading"; message: string }
-  | { status: "lost-key" }
+  | { status: "lost-key"; message: string }
   | { status: "unreadable"; message: string }
   | { status: "ready"; document: RecoveredDocument; downloadError?: string };
 
@@ -86,9 +84,54 @@ type PublishRetry = {
 };
 
 const ENVELOPE_BATCH_SIZE = 20;
+const READ_QUERY_CONCURRENCY = 3;
+
+async function mapWithConcurrency<T, R>(
+  values: T[],
+  limit: number,
+  mapper: (value: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(values.length);
+  let nextIndex = 0;
+  const workers = Array.from(
+    { length: Math.min(limit, values.length) },
+    async () => {
+      while (nextIndex < values.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        results[index] = await mapper(values[index]);
+      }
+    },
+  );
+  await Promise.all(workers);
+  return results;
+}
+
+function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
+  if (left.length !== right.length) return false;
+  let difference = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    difference |= left[index] ^ right[index];
+  }
+  return difference === 0;
+}
+
+function publicKeyLabel(key: Uint8Array): string {
+  return Array.from(key.slice(0, 8), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+}
 
 function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  if (error && typeof error === "object") {
+    const payload = (error as { payload?: unknown }).payload;
+    if (payload && typeof payload === "object") {
+      const reason = (payload as { reason?: unknown }).reason;
+      if (typeof reason === "string" && reason.trim()) return reason;
+    }
+    if (error instanceof Error) return error.message;
+  }
+  return String(error);
 }
 
 function formatPas(value: bigint): string {
@@ -118,10 +161,6 @@ function countdown(deadline: bigint, now: number): string {
   return `${minutes}m ${seconds}s`;
 }
 
-function rawBlobUrl(cid: string): string {
-  return `${BULLETIN_IPFS_GATEWAY.replace(/\/$/, "")}/ipfs/${cid}`;
-}
-
 function formatSdkPas(value: bigint): string {
   const whole = value / PAS_SDK_UNIT;
   const remainder = value % PAS_SDK_UNIT;
@@ -144,6 +183,9 @@ function friendlyBuyError(error: unknown): string {
 function friendlyOwnerError(error: unknown): string {
   const message = messageOf(error);
   const normalized = message.toLowerCase();
+  if (normalized.includes("no allowance set for account")) {
+    return "The Product account has no smart-contract transaction allowance. Approve the allowance request and retry.";
+  }
   if (normalized.includes("not owner")) return "Owner action from a non-owner account.";
   if (normalized.includes("sale still open")) return "Deadline has not passed.";
   if (normalized.includes("already published")) return "Drop is already published.";
@@ -165,47 +207,79 @@ function parsePasPrice(value: string): bigint {
 export default function DropsPage() {
   const [drops, setDrops] = useState<DropInfo[]>([]);
   const [owner, setOwner] = useState("");
-  const [account, setAccount] = useState<AppWalletAccount | null>(null);
-  const [connectedSs58, setConnectedSs58] = useState("");
-  const [connectedEvm, setConnectedEvm] = useState("");
   const [buyerByDrop, setBuyerByDrop] = useState<Record<string, boolean>>({});
-  const [localKeyState, setLocalKeyState] = useState<"unknown" | "available" | "missing">("unknown");
+  const [localKeyByDrop, setLocalKeyByDrop] = useState<
+    Record<string, "unknown" | "available" | "missing">
+  >({});
   const [buyByDrop, setBuyByDrop] = useState<Record<string, BuyState>>({});
   const [createName, setCreateName] = useState("");
   const [createPrice, setCreatePrice] = useState("1");
   const [createDeadline, setCreateDeadline] = useState("");
   const [createState, setCreateState] = useState<OwnerActionState>({ status: "idle" });
+  const [bulletinState, setBulletinState] = useState<OwnerActionState>({ status: "idle" });
   const [fileByDrop, setFileByDrop] = useState<Record<string, File | undefined>>({});
   const [publishByDrop, setPublishByDrop] = useState<Record<string, OwnerActionState>>({});
   const [retryByDrop, setRetryByDrop] = useState<Record<string, PublishRetry | undefined>>({});
   const [openByDrop, setOpenByDrop] = useState<Record<string, OpenState>>({});
   const [loading, setLoading] = useState(true);
-  const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
   const clientRef = useRef<DropsContractClient | null>(null);
   const objectUrlsRef = useRef(new Set<string>());
+  const ownerBulletinCheckRef = useRef<string | null>(null);
+
+  const {
+    selectedAccount: account,
+    selectedAddress,
+    walletStatus,
+    connectWallet: connectSessionWallet,
+    bulletinAllowance,
+    checkingBulletinAllowance,
+    bulletinAllowanceError,
+    refreshBulletinAllowance,
+    setKnownBulletinAllowance,
+  } = useAppSession();
+  const connectedSs58 = selectedAddress ?? "";
+  const connectedEvm = useMemo(
+    () => (selectedAddress ? ss58ToH160(selectedAddress) : ""),
+    [selectedAddress],
+  );
 
   const isOwner =
     connectedEvm !== "" && owner.toLowerCase() === connectedEvm.toLowerCase();
+  const publisherReady =
+    isOwner &&
+    bulletinAllowance?.usable === true &&
+    !checkingBulletinAllowance &&
+    bulletinState.status !== "working";
 
   const updateBuyerStatus = useCallback(
     async (client: DropsContractClient, evm: string, currentDrops: DropInfo[]) => {
-      const entries = await Promise.all(
-        currentDrops.map(async (drop) => [
+      const entries = await mapWithConcurrency(
+        currentDrops,
+        READ_QUERY_CONCURRENCY,
+        async (drop) => [
           drop.id.toString(),
           await client.isBuyer(drop.id, evm),
-        ] as const),
+        ] as const,
       );
       const statuses = Object.fromEntries(entries);
       setBuyerByDrop(statuses);
-      if (Object.values(statuses).some(Boolean)) {
+      const keyStatuses: Record<string, "unknown" | "available" | "missing"> = {};
+      for (const drop of currentDrops) {
+        const key = drop.id.toString();
+        if (!statuses[key]) continue;
         try {
-          setLocalKeyState(await loadDropsEncryptionKey() ? "available" : "missing");
+          const registered = await client.encKeyOf(drop.id, evm);
+          keyStatuses[key] = await loadDropsEncryptionKeyForPublicKey(
+            evm,
+            registered,
+          ) ? "available" : "missing";
         } catch {
-          setLocalKeyState("missing");
+          keyStatuses[key] = "unknown";
         }
       }
+      setLocalKeyByDrop(keyStatuses);
     },
     [],
   );
@@ -224,7 +298,11 @@ export default function DropsPage() {
         { length: Number(count) },
         (_, index) => count - BigInt(index),
       );
-      const nextDrops = await Promise.all(ids.map((id) => client.dropInfo(id)));
+      const nextDrops = await mapWithConcurrency(
+        ids,
+        READ_QUERY_CONCURRENCY,
+        (id) => client.dropInfo(id),
+      );
       setOwner(nextOwner);
       setDrops(nextDrops);
       if (connectedEvm) {
@@ -257,25 +335,110 @@ export default function DropsPage() {
     };
   }, []);
 
+  // A wallet can already be connected from Storage (or restored by transport
+  // recovery), so the Drops Connect button is not guaranteed to run here.
+  // Once the contract identifies that address as owner, start exactly one
+  // publisher Bulletin readiness check for it.
+  useEffect(() => {
+    if (!account || !isOwner || bulletinAllowance !== undefined) {
+      if (!isOwner) ownerBulletinCheckRef.current = null;
+      return;
+    }
+    if (ownerBulletinCheckRef.current === account.address) return;
+    ownerBulletinCheckRef.current = account.address;
+    let active = true;
+    setBulletinState({
+      status: "working",
+      message: "Checking publisher Bulletin authorization...",
+    });
+    void ensureAccountBulletinReady(
+      account.address,
+      (message) => {
+        if (active) setBulletinState({ status: "working", message });
+      },
+    )
+      .then((next) => {
+        if (!active) return;
+        setKnownBulletinAllowance(account.address, next);
+        setBulletinState({
+          status: "done",
+          message: `Bulletin ready: ${formatNumber(next.remainingTransactions)} transaction(s), ${formatBytes(next.remainingBytes)} remaining.`,
+        });
+      })
+      .catch((authorizationError) => {
+        if (!active) return;
+        if (
+          recoverTimedOutBulletinTransport(
+            account.address,
+            authorizationError,
+          )
+        ) {
+          return;
+        }
+        setBulletinState({
+          status: "error",
+          message: messageOf(authorizationError),
+        });
+      });
+    return () => {
+      active = false;
+    };
+  }, [
+    account,
+    bulletinAllowance,
+    isOwner,
+    setKnownBulletinAllowance,
+  ]);
+
   const connect = useCallback(async () => {
-    setConnecting(true);
     setError(null);
     try {
-      const [account] = await connectHostWallet();
-      if (!account) throw new Error("Host wallet returned no account.");
+      const account = await connectSessionWallet();
       const evm = ss58ToH160(account.address);
-      setAccount(account);
-      setConnectedSs58(account.address);
-      setConnectedEvm(evm);
       const client = clientRef.current ?? await createDropsContractClient();
       clientRef.current = client;
-      await updateBuyerStatus(client, evm, drops);
+      const [currentOwner] = await Promise.all([
+        owner || client.owner(),
+        updateBuyerStatus(client, evm, drops),
+      ]);
+      if (!owner) setOwner(currentOwner);
+
+      // Buyers only connect their wallet. Bulletin allocation is requested
+      // exclusively for the contract owner who can publish files.
+      if (currentOwner.toLowerCase() === evm.toLowerCase()) {
+        setBulletinState({
+          status: "working",
+          message: "Preparing publisher Bulletin authorization...",
+        });
+        try {
+          const next = await ensureAccountBulletinReady(
+            account.address,
+            (message) => setBulletinState({ status: "working", message }),
+          );
+          setKnownBulletinAllowance(account.address, next);
+          setBulletinState({
+            status: "done",
+            message: `Bulletin ready: ${formatNumber(next.remainingTransactions)} transaction(s), ${formatBytes(next.remainingBytes)} remaining.`,
+          });
+        } catch (authorizationError) {
+          if (
+            recoverTimedOutBulletinTransport(
+              account.address,
+              authorizationError,
+            )
+          ) {
+            return;
+          }
+          setBulletinState({
+            status: "error",
+            message: messageOf(authorizationError),
+          });
+        }
+      }
     } catch (nextError) {
       setError(messageOf(nextError));
-    } finally {
-      setConnecting(false);
     }
-  }, [drops, updateBuyerStatus]);
+  }, [connectSessionWallet, drops, owner, setKnownBulletinAllowance, updateBuyerStatus]);
 
   const buyDrop = useCallback(async (drop: DropInfo) => {
     const key = drop.id.toString();
@@ -295,12 +458,19 @@ export default function DropsPage() {
       const readClient = clientRef.current ?? await createDropsContractClient();
       clientRef.current = readClient;
       const alreadyBuyer = await readClient.isBuyer(drop.id, connectedEvm);
-      const keyResolution = await loadOrCreateDropsEncryptionKey(alreadyBuyer);
+      const registeredPublicKey = alreadyBuyer
+        ? await readClient.encKeyOf(drop.id, connectedEvm)
+        : undefined;
+      const keyResolution = await loadOrCreateDropsEncryptionKey(
+        connectedEvm,
+        alreadyBuyer,
+        registeredPublicKey,
+      );
       if (keyResolution.status === "missing-paid-key") {
-        setLocalKeyState("missing");
+        setLocalKeyByDrop((current) => ({ ...current, [key]: "missing" }));
         throw new Error("This address already paid, but its original device key is missing. A replacement key cannot repair the purchase.");
       }
-      setLocalKeyState("available");
+      setLocalKeyByDrop((current) => ({ ...current, [key]: "available" }));
 
       setBuyByDrop((current) => ({
         ...current,
@@ -353,6 +523,13 @@ export default function DropsPage() {
       setCreateState({ status: "error", message: "Connect the contract owner account first." });
       return;
     }
+    if (!publisherReady) {
+      setCreateState({
+        status: "error",
+        message: "Wait until publisher Bulletin authorization is ready.",
+      });
+      return;
+    }
     setCreateState({ status: "working", message: "Validating drop details..." });
     try {
       const name = createName.trim();
@@ -376,30 +553,69 @@ export default function DropsPage() {
     } catch (nextError) {
       setCreateState({ status: "error", message: friendlyOwnerError(nextError) });
     }
-  }, [account, createDeadline, createName, createPrice, isOwner, refresh]);
+  }, [account, createDeadline, createName, createPrice, isOwner, publisherReady, refresh]);
+
+  const allocateBulletin = useCallback(async (
+    onProgress: (message: string) => void,
+    minimum?: StoreAuthorization,
+  ) => {
+    if (!account || !isOwner) throw new Error("Connect the contract owner account first.");
+    const next = await ensureAccountBulletinReady(
+      account.address,
+      onProgress,
+      minimum,
+    );
+    setKnownBulletinAllowance(account.address, next);
+    return next;
+  }, [account, isOwner, setKnownBulletinAllowance]);
+
+  const requestOwnerBulletin = useCallback(async () => {
+    setBulletinState({ status: "working", message: "Preparing Devnet Bulletin authorization..." });
+    try {
+      const next = await allocateBulletin((message) => {
+        setBulletinState({ status: "working", message });
+      });
+      setBulletinState({
+        status: "done",
+        message: `Bulletin ready: ${formatNumber(next.remainingTransactions)} transaction(s), ${formatBytes(next.remainingBytes)} remaining.`,
+      });
+    } catch (nextError) {
+      setBulletinState({ status: "error", message: messageOf(nextError) });
+    }
+  }, [allocateBulletin]);
 
   const authorizeBulletin = useCallback(async (drop: DropInfo) => {
     const key = drop.id.toString();
-    if (!account || !isOwner) return;
+    const file = fileByDrop[key];
+    const minimum = file
+      ? estimateStoreAuthorization(estimateBlobSize(file))
+      : undefined;
     setPublishByDrop((current) => ({
       ...current,
       [key]: { status: "working", message: "Preparing Devnet Bulletin authorization..." },
     }));
     try {
-      await requestAllowance(account.address, (message) => setPublishByDrop((current) => ({
+      const next = await allocateBulletin(
+        (message) => setPublishByDrop((current) => ({
+          ...current,
+          [key]: { status: "working", message },
+        })),
+        minimum,
+      );
+      setPublishByDrop((current) => ({
         ...current,
-        [key]: { status: "working", message },
-      })));
-      const allowance = await fetchAllowance(account.address);
-      if (!allowance || allowance.expired) throw new Error("Bulletin authorization was not found after finalization.");
-      setPublishByDrop((current) => ({ ...current, [key]: { status: "idle" } }));
+        [key]: {
+          status: "done",
+          message: `Bulletin ready: ${formatNumber(next.remainingTransactions)} transaction(s), ${formatBytes(next.remainingBytes)} remaining. Press Publish file again.`,
+        },
+      }));
     } catch (nextError) {
       setPublishByDrop((current) => ({
         ...current,
         [key]: { status: "error", message: messageOf(nextError) },
       }));
     }
-  }, [account, isOwner]);
+  }, [allocateBulletin, fileByDrop]);
 
   const publishDrop = useCallback(async (drop: DropInfo) => {
     const key = drop.id.toString();
@@ -420,18 +636,32 @@ export default function DropsPage() {
           throw new Error(`Encrypted blob is approximately ${formatBytes(BigInt(estimatedSize))}, above the ${formatBytes(BigInt(MAX_FILE_SIZE))} limit.`);
         }
 
-        const allowance: Allowance | null = await fetchAllowance(account.address);
-        if (!allowance || allowance.expired) {
+        const allowance = await refreshBulletinAllowance(true, true, true);
+        if (!allowance?.usable) {
           setPublishByDrop((current) => ({
             ...current,
-            [key]: { status: "needs-allowance", message: "This Product account needs a Devnet Bulletin storage authorization before upload." },
+            [key]: {
+              status: "needs-allowance",
+              message: allowance?.expired
+                ? "The Bulletin allowance expired. Request a new host-managed allowance before upload."
+                : allowance?.exhausted
+                  ? "The Bulletin allowance quota is exhausted. Request a new host-managed allowance before upload."
+                  : "This Product account needs a host-managed Devnet Bulletin allowance before upload.",
+            },
           }));
           return;
         }
-        if (allowance.remainingBytes < BigInt(estimatedSize)) {
+        const estimatedRequired = estimateStoreAuthorization(estimatedSize);
+        if (
+          allowance.remainingBytes < estimatedRequired.bytes ||
+          allowance.remainingTransactions < estimatedRequired.transactions
+        ) {
           setPublishByDrop((current) => ({
             ...current,
-            [key]: { status: "needs-allowance", message: `The encrypted blob needs about ${formatBytes(BigInt(estimatedSize))}, but only ${formatBytes(allowance.remainingBytes)} remains.` },
+            [key]: {
+              status: "needs-allowance",
+              message: `The Bulletin upload needs about ${formatBytes(estimatedRequired.bytes)} and ${estimatedRequired.transactions} transaction(s); ${formatBytes(allowance.remainingBytes)} and ${allowance.remainingTransactions} transaction(s) remain.`,
+            },
           }));
           return;
         }
@@ -463,11 +693,28 @@ export default function DropsPage() {
         if (blob.length > MAX_FILE_SIZE) {
           throw new Error(`Encrypted blob is ${formatBytes(BigInt(blob.length))}, above the ${formatBytes(BigInt(MAX_FILE_SIZE))} limit.`);
         }
+        const exactRequired = estimateStoreAuthorization(blob.length);
+        if (
+          allowance.remainingBytes < exactRequired.bytes ||
+          allowance.remainingTransactions < exactRequired.transactions
+        ) {
+          setPublishByDrop((current) => ({
+            ...current,
+            [key]: {
+              status: "needs-allowance",
+              message: `The final Bulletin upload needs ${formatBytes(exactRequired.bytes)} and ${exactRequired.transactions} transaction(s); ${formatBytes(allowance.remainingBytes)} and ${allowance.remainingTransactions} transaction(s) remain.`,
+            },
+          }));
+          newContentKey.fill(0);
+          newContentKey = null;
+          return;
+        }
 
         const stored = await storeBlob(blob, account.polkadotSigner, (message) => setPublishByDrop((current) => ({
           ...current,
           [key]: { status: "working", message },
         })));
+        void refreshBulletinAllowance(false).catch(() => undefined);
         retry = {
           cid: stored.cid,
           contentKey: newContentKey,
@@ -506,6 +753,22 @@ export default function DropsPage() {
 
       setPublishByDrop((current) => ({
         ...current,
+        [key]: { status: "working", message: "Verifying every buyer envelope on-chain before publication..." },
+      }));
+      for (let index = 0; index < retry.buyers.length; index += 1) {
+        const storedEnvelope = await writeClient.envelopeOf(
+          drop.id,
+          retry.buyers[index],
+        );
+        if (!bytesEqual(storedEnvelope, envelopes[index])) {
+          throw new Error(
+            `Envelope verification failed for buyer ${index + 1}. The CID was not published.`,
+          );
+        }
+      }
+
+      setPublishByDrop((current) => ({
+        ...current,
         [key]: { status: "working", message: "Publishing the retained Bulletin CID..." },
       }));
       const result = await writeClient.publish(drop.id, retry.cid);
@@ -524,43 +787,109 @@ export default function DropsPage() {
         [key]: { status: "error", message: friendlyOwnerError(nextError) },
       }));
     }
-  }, [account, fileByDrop, isOwner, refresh, retryByDrop]);
+  }, [account, fileByDrop, isOwner, refresh, refreshBulletinAllowance, retryByDrop]);
 
   const openDrop = useCallback(async (drop: DropInfo) => {
     const key = drop.id.toString();
     const client = clientRef.current;
     if (!client || !drop.cid) return;
-    const isBuyer = buyerByDrop[key] === true;
+    if (!connectedEvm) {
+      setOpenByDrop((current) => ({
+        ...current,
+        [key]: {
+          status: "unreadable",
+          message: "Connect the wallet that bought this drop before opening it.",
+        },
+      }));
+      return;
+    }
     setOpenByDrop((current) => ({
       ...current,
-      [key]: { status: "loading", message: "Checking the local device key..." },
+      [key]: { status: "loading", message: "Checking the purchase and its registered key..." },
     }));
 
     let localKey = null;
-    if (isBuyer) {
-      try {
-        localKey = await loadDropsEncryptionKey();
-      } catch {
-        setOpenByDrop((current) => ({ ...current, [key]: { status: "lost-key" } }));
-        return;
+    let isBuyer = false;
+    let envelope: Uint8Array | null = null;
+    try {
+      isBuyer = await client.isBuyer(drop.id, connectedEvm);
+      setBuyerByDrop((current) => ({ ...current, [key]: isBuyer }));
+      if (isBuyer) {
+        const registeredPublicKey = await client.encKeyOf(
+          drop.id,
+          connectedEvm,
+        );
+        localKey = await loadDropsEncryptionKeyForPublicKey(
+          connectedEvm,
+          registeredPublicKey,
+        );
+        if (!localKey) {
+          setLocalKeyByDrop((current) => ({ ...current, [key]: "missing" }));
+          setOpenByDrop((current) => ({
+            ...current,
+            [key]: {
+              status: "lost-key",
+              message: `The purchase is valid and the contract contains an envelope, but this Desktop does not have the private key registered for it (${publicKeyLabel(registeredPublicKey)}...). Re-pairing or replacing it cannot decrypt this already-published drop.`,
+            },
+          }));
+          return;
+        }
+        setLocalKeyByDrop((current) => ({ ...current, [key]: "available" }));
+        envelope = await client.envelopeOf(drop.id, connectedEvm);
+        if (envelope.length === 0) {
+          setOpenByDrop((current) => ({
+            ...current,
+            [key]: {
+              status: "unreadable",
+              message: "The purchase is valid, but the publisher did not store an envelope for this buyer before publishing the CID.",
+            },
+          }));
+          return;
+        }
       }
-      if (!localKey) {
-        setOpenByDrop((current) => ({ ...current, [key]: { status: "lost-key" } }));
-        return;
-      }
+    } catch (nextError) {
+      setOpenByDrop((current) => ({
+        ...current,
+        [key]: {
+          status: "unreadable",
+          message: `The contract access check failed. ${messageOf(nextError)}`,
+        },
+      }));
+      return;
     }
 
+    let storedBlob: Uint8Array;
     try {
       setOpenByDrop((current) => ({
         ...current,
         [key]: { status: "loading", message: "Downloading the complete public encrypted blob..." },
       }));
-      const storedBlob = await fetchBlobByCid(drop.cid);
+      storedBlob = await fetchBlobByCid(drop.cid, {
+        onDiagnostic: (message) => console.info(`[Drops CID ${drop.cid}] ${message}`),
+      });
+    } catch (nextError) {
+      setOpenByDrop((current) => ({
+        ...current,
+        [key]: {
+          status: "unreadable",
+          message: `The Bulletin blob could not be downloaded. ${messageOf(nextError)}`,
+        },
+      }));
+      return;
+    }
+
+    if (isBuyer) {
+      setOpenByDrop((current) => ({
+        ...current,
+        [key]: { status: "loading", message: "Opening the verified buyer envelope and decrypting locally..." },
+      }));
+    }
+
+    try {
       const decoded = decodeBlob(storedBlob);
 
       let contentKey: Uint8Array;
-      if (isBuyer && localKey && connectedEvm) {
-        const envelope = await client.envelopeOf(drop.id, connectedEvm);
+      if (isBuyer && localKey && envelope) {
         contentKey = await unwrapContentKey(
           envelope,
           localKey.publicKeyRaw,
@@ -602,12 +931,12 @@ export default function DropsPage() {
         [key]: {
           status: "unreadable",
           message: isBuyer
-            ? `The public blob was downloaded, but this device could not authenticate the envelope or file. ${detail}`
+            ? `The Bulletin blob and matching local buyer key were found, but envelope or file authentication failed. ${detail}`
             : "The complete public blob was downloaded, but its bytes are unreadable without a buyer key. No server made this decision; AES-GCM authentication did.",
         },
       }));
     }
-  }, [buyerByDrop, connectedEvm]);
+  }, [connectedEvm]);
 
   const publishedCount = useMemo(
     () => drops.filter((drop) => drop.published).length,
@@ -625,9 +954,18 @@ export default function DropsPage() {
           public on Bulletin. Only cryptography decides who can read them.
         </p>
         <div className="drops-toolbar">
-          <button className="btn btn-ink" type="button" disabled={connecting} onClick={connect}>
-            {connecting ? "Connecting..." : connectedSs58 ? "Wallet connected" : "Connect Polkadot wallet"}
-          </button>
+          {connectedSs58 ? (
+            <span className="btn btn-ink wallet-connected-badge">Wallet connected</span>
+          ) : (
+            <button
+              className="btn btn-ink"
+              type="button"
+              disabled={walletStatus === "connecting"}
+              onClick={connect}
+            >
+              {walletStatus === "connecting" ? "Connecting..." : "Connect Polkadot wallet"}
+            </button>
+          )}
           <button className="btn btn-ghost" type="button" disabled={loading} onClick={() => void refresh()}>
             Refresh drops
           </button>
@@ -645,6 +983,74 @@ export default function DropsPage() {
           <div className="story-kicker">Owner account</div>
           <h2>Publisher controls</h2>
           <p>Create a public sale announcement. The real file name remains encrypted inside the later PRFY1 blob and does not need to match this name.</p>
+          <div className={`drops-bulletin-status${bulletinAllowanceError || bulletinState.status === "error" ? " is-error" : ""}`}>
+            <div>
+              <strong>Bulletin storage</strong>
+              {checkingBulletinAllowance || bulletinState.status === "working" ? (
+                <span>Checking on-chain authorization...</span>
+              ) : bulletinAllowanceError ? (
+                <span>{bulletinAllowanceError}</span>
+              ) : bulletinState.status === "error" && bulletinAllowance === undefined ? (
+                <span>{bulletinState.message}</span>
+              ) : bulletinAllowance?.usable ? (
+                <span>
+                  Authorized: {formatNumber(bulletinAllowance.remainingTransactions)} transaction(s), {formatBytes(bulletinAllowance.remainingBytes)} remaining
+                  {bulletinAllowance.expiresAtBlock !== undefined && `; expires at block ${formatNumber(bulletinAllowance.expiresAtBlock)}`}
+                  {bulletinAllowance.remainingBlocks !== undefined && ` (${formatNumber(bulletinAllowance.remainingBlocks)} blocks left)`}.
+                </span>
+              ) : bulletinAllowance?.expired ? (
+                <span>Authorization expired.</span>
+              ) : bulletinAllowance?.exhausted ? (
+                <span>Authorization quota is exhausted.</span>
+              ) : bulletinAllowance === undefined ? (
+                <span>Bulletin authorization has not been checked yet.</span>
+              ) : (
+                <span>No Bulletin authorization is available for this account.</span>
+              )}
+            </div>
+            {!checkingBulletinAllowance &&
+              bulletinState.status !== "working" &&
+              (bulletinAllowanceError || bulletinState.status === "error") && (
+              isBulletinTransportTimeout(
+                bulletinAllowanceError ??
+                  (bulletinState.status === "error" ? bulletinState.message : undefined),
+              ) ? (
+                <button
+                  className="btn btn-ink"
+                  type="button"
+                  onClick={() => window.location.reload()}
+                >
+                  Reload page
+                </button>
+              ) : (
+                <button
+                  className="btn btn-ink"
+                  type="button"
+                  onClick={() => void requestOwnerBulletin()}
+                >
+                  Recheck Bulletin
+                </button>
+              )
+            )}
+            {!checkingBulletinAllowance && bulletinAllowance !== undefined && !bulletinAllowanceError && !bulletinAllowance?.usable && (
+              <button
+                className="btn btn-pink"
+                type="button"
+                disabled={bulletinState.status === "working"}
+                onClick={() => void requestOwnerBulletin()}
+              >
+                {bulletinState.status === "working" ? "Authorizing..." : "Request Bulletin allowance"}
+              </button>
+            )}
+          </div>
+          {bulletinState.status !== "idle" &&
+            (bulletinState.status === "working" ||
+              (bulletinState.status === "done" && bulletinAllowance?.usable) ||
+              (bulletinState.status === "error" && !bulletinAllowance?.usable)) && (
+            <p className={bulletinState.status === "error" ? "drops-open-error" : "drops-open-status"} role={bulletinState.status === "error" ? "alert" : undefined}>
+              {bulletinState.message}
+            </p>
+          )}
           <form className="drops-owner-form" onSubmit={createDrop}>
             <label>
               Public announced name
@@ -676,8 +1082,12 @@ export default function DropsPage() {
                 required
               />
             </label>
-            <button className="btn btn-pink" type="submit" disabled={createState.status === "working"}>
-              {createState.status === "working" ? "Creating..." : "Create drop"}
+            <button className="btn btn-pink" type="submit" disabled={!publisherReady || createState.status === "working"}>
+              {createState.status === "working"
+                ? "Creating..."
+                : publisherReady
+                  ? "Create drop"
+                  : "Waiting for Bulletin..."}
             </button>
           </form>
           {createState.status !== "idle" && (
@@ -710,7 +1120,7 @@ export default function DropsPage() {
         {drops.map((drop) => {
           const key = drop.id.toString();
           const isBuyer = buyerByDrop[key] === true;
-          const missingPaidKey = isBuyer && localKeyState === "missing";
+          const missingPaidKey = isBuyer && localKeyByDrop[key] === "missing";
           const buyState = buyByDrop[key] ?? { status: "idle" as const };
           const openState = openByDrop[key] ?? { status: "idle" as const };
           const publishState = publishByDrop[key] ?? { status: "idle" as const };
@@ -819,7 +1229,7 @@ export default function DropsPage() {
                     </button>
                     {publishState.status === "needs-allowance" && (
                       <button className="btn btn-pink" type="button" onClick={() => void authorizeBulletin(drop)}>
-                        Authorize Devnet storage
+                        Request Bulletin allowance
                       </button>
                     )}
                   </div>
@@ -842,13 +1252,12 @@ export default function DropsPage() {
                     <button className="btn btn-pink" type="button" disabled={openState.status === "loading"} onClick={() => void openDrop(drop)}>
                       {openState.status === "loading" ? "Opening..." : "Open file"}
                     </button>
-                    <a className="text-link" href={rawBlobUrl(drop.cid)} target="_blank" rel="noreferrer">Download raw encrypted blob</a>
                   </div>
 
                   {openState.status === "loading" && <p className="drops-open-status">{openState.message}</p>}
                   {openState.status === "lost-key" && (
                     <p className="drops-open-error" role="alert">
-                      This address bought the drop, but its encryption key is missing. It was created on another device or this Product&apos;s app data was cleared. The drop cannot be opened and the payment is not recoverable.
+                      {openState.message}
                     </p>
                   )}
                   {openState.status === "unreadable" && <p className="drops-open-error" role="alert">{openState.message}</p>}
