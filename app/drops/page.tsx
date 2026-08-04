@@ -397,11 +397,15 @@ export default function DropsPage() {
       const evm = ss58ToH160(account.address);
       const client = clientRef.current ?? await createDropsContractClient();
       clientRef.current = client;
-      const [currentOwner] = await Promise.all([
-        owner || client.owner(),
-        updateBuyerStatus(client, evm, drops),
-      ]);
+      const currentOwner = owner || (await client.owner());
       if (!owner) setOwner(currentOwner);
+
+      // Buyer-status is UI bookkeeping (per-drop isBuyer/encKeyOf reads), not
+      // a prerequisite for the Bulletin check below. Run it without blocking
+      // that check -- it can update the drop list whenever it lands.
+      void updateBuyerStatus(client, evm, drops).catch((nextError) => {
+        setError(messageOf(nextError));
+      });
 
       // Buyers only connect their wallet. Bulletin allocation is requested
       // exclusively for the contract owner who can publish files.
