@@ -1,8 +1,39 @@
 import { Enum } from "polkadot-api";
+import { subscribeConnectionStatus } from "@parity/truapi/sandbox";
 import { getBulletin } from "./client";
 
 const DIRECT_QUERY_TIMEOUT_MS = 8_000;
 const DIRECT_QUERY_ATTEMPTS = 2;
+const HOST_READY_TIMEOUT_MS = 5_000;
+const RETRY_DELAY_MS = 1_500;
+
+/**
+ * Waits for the host transport to report "connected" before issuing a query.
+ * Right after a wallet connect or a fresh document load, the host channel
+ * handshake can still be settling; querying before it lands is what produces
+ * a spurious timeout that a plain retry does not fix, since it races the
+ * same not-yet-ready channel again. Resolves either way once the timeout
+ * elapses -- this is a best-effort wait, not a hard gate.
+ */
+function waitForHostConnected(timeoutMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    let unsubscribe: () => void = () => undefined;
+    const timer = setTimeout(() => {
+      unsubscribe();
+      resolve();
+    }, timeoutMs);
+    unsubscribe = subscribeConnectionStatus((status) => {
+      if (status !== "connected") return;
+      clearTimeout(timer);
+      unsubscribe();
+      resolve();
+    });
+  });
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 type AuthorizationRecord = {
   extent?: {
@@ -72,6 +103,8 @@ export async function queryAccountAuthorization(
 ): Promise<AuthorizationStorageResult> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= DIRECT_QUERY_ATTEMPTS; attempt += 1) {
+    if (attempt > 1) await delay(RETRY_DELAY_MS);
+    await waitForHostConnected(HOST_READY_TIMEOUT_MS);
     try {
       return await queryOnce(address, includeCurrentBlock);
     } catch (error) {
