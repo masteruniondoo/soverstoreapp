@@ -49,10 +49,7 @@ export function clearBulletinTransportRecovery(): void {
  */
 export function isBulletinTransportTimeout(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return (
-    message.includes("Direct Bulletin lookup timed out") ||
-    message.includes("Bulletin account lookup timed out")
-  );
+  return message.includes("Bulletin authorization query timed out");
 }
 
 /**
