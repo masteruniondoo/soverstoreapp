@@ -1284,32 +1284,67 @@ code {
 }
 
 .file-input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
-  pointer-events: none;
+  position: static;
+  order: 2;
+  width: 100%;
+  min-height: 46px;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  opacity: 1;
+  cursor: pointer;
+}
+
+.file-input::file-selector-button {
+  min-height: 34px;
+  margin-right: 10px;
+  padding: 7px 12px;
+  border: 1px solid var(--ink);
+  border-radius: 6px;
+  background: var(--ink);
+  color: var(--paper);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.file-input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .file-drop {
-  width: 100%;
-}
-
-.file-drop-label {
   display: grid;
-  gap: 5px;
+  gap: 12px;
   width: 100%;
-  min-height: 104px;
-  align-content: center;
   padding: 18px 20px;
   border: 1.5px dashed var(--ink-30);
   border-radius: 10px;
   background: var(--card);
+}
+
+.file-drop:hover,
+.file-drop:focus-within {
+  border-color: var(--pink);
+}
+
+.file-drop-label {
+  display: grid;
+  order: 1;
+  gap: 5px;
+  width: 100%;
+  min-height: 46px;
+  align-content: center;
+  padding: 0;
   cursor: pointer;
 }
 
 .file-drop-label:hover {
-  border-color: var(--pink);
+  color: var(--pink-deep);
 }
 
 .file-drop-label.disabled {
@@ -1596,6 +1631,12 @@ code {
 
 .preview-download {
   justify-self: start;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .desktop-file-action {
+    display: none;
+  }
 }
 
 .preview-safety-note {

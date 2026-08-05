@@ -13,6 +13,7 @@ import { aesGcmDecrypt } from "@/lib/crypto/aes";
 import { base64ToBytes } from "@/lib/crypto/hash";
 import { formatBytes } from "@/lib/format";
 import {
+  copyDocument,
   createDocumentUrl,
   documentPreviewKind,
   downloadDocument,
@@ -351,6 +352,28 @@ export default function RecoveryPage() {
               type="button"
               onClick={() => {
                 setError(null);
+                void copyDocument(result)
+                  .then((copiedKind) => {
+                    setProgress(
+                      copiedKind === "image"
+                        ? "Image copied. Paste it into a message, email, notes, or another app."
+                        : copiedKind === "text"
+                          ? "Document text copied to the clipboard."
+                          : "Document copied to the clipboard.",
+                    );
+                  })
+                  .catch((e) =>
+                    setError(e instanceof Error ? e.message : String(e)),
+                  );
+              }}
+            >
+              Copy recovered document
+            </button>
+            <button
+              className="btn btn-ghost preview-download desktop-file-action"
+              type="button"
+              onClick={() => {
+                setError(null);
                 void downloadDocument(result).catch((e) =>
                   setError(e instanceof Error ? e.message : String(e)),
                 );
@@ -359,7 +382,7 @@ export default function RecoveryPage() {
               Save / share recovered file
             </button>
             <button
-              className="btn btn-ghost preview-download"
+              className="btn btn-ghost preview-download desktop-file-action"
               type="button"
               onClick={() => {
                 void downloadRecoveryQrCard(

@@ -34,6 +34,7 @@ const hostManager = new SignerManager({
       : new DevProvider(),
 });
 const HOST_PERMISSION_TIMEOUT_MS = 15_000;
+const HOST_RESOURCE_TIMEOUT_MS = 30_000;
 const HOST_RELOAD_DELAY_MS = 2_500;
 let connectPromise: Promise<AppWalletAccount[]> | null = null;
 let chainSubmitPermissionVerified = false;
@@ -177,7 +178,11 @@ async function ensureResourceAllowance(
       },
   label: string,
 ): Promise<void> {
-  const allocation = await requestResourceAllocation([resource]);
+  const allocation = await withTimeout(
+    requestResourceAllocation([resource]),
+    HOST_RESOURCE_TIMEOUT_MS,
+    `${label} allocation`,
+  );
   if (!allocation.ok) throw allocation.error;
 
   const [outcome] = allocation.value;

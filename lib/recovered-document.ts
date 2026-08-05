@@ -52,6 +52,128 @@ function recoveredFile(result: RecoveredDocument): File {
   });
 }
 
+function recoveredBlob(result: RecoveredDocument): Blob {
+  const bytes = new Uint8Array(result.content.length);
+  bytes.set(result.content);
+  return new Blob([bytes.buffer as ArrayBuffer], {
+    type: result.meta.type || "application/octet-stream",
+  });
+}
+
+function legacyCopyText(text: string): boolean {
+  const input = document.createElement("textarea");
+  input.value = text;
+  input.readOnly = true;
+  input.style.position = "fixed";
+  input.style.inset = "0 auto auto -10000px";
+  input.style.opacity = "0";
+  document.body.appendChild(input);
+  input.focus();
+  input.select();
+  const copied = document.execCommand("copy");
+  input.remove();
+  return copied;
+}
+
+async function copyText(text: string): Promise<void> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+  } catch {
+    // Embedded mobile WebViews may expose the API while denying the call. The
+    // selection-based fallback still works in a number of those hosts.
+  }
+  if (!legacyCopyText(text)) {
+    throw new Error(
+      "The mobile app did not allow clipboard access. Select the text in the preview and copy it manually.",
+    );
+  }
+}
+
+async function imageAsPng(result: RecoveredDocument): Promise<Blob> {
+  const image = new Image();
+  await new Promise<void>((resolve, reject) => {
+    image.onload = () => resolve();
+    image.onerror = () => reject(new Error("The recovered image could not be prepared for copying."));
+    image.src = result.objectUrl;
+  });
+  const canvas = document.createElement("canvas");
+  canvas.width = image.naturalWidth;
+  canvas.height = image.naturalHeight;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("This mobile browser cannot copy images.");
+  context.drawImage(image, 0, 0);
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      (blob) =>
+        blob
+          ? resolve(blob)
+          : reject(new Error("The recovered image could not be copied.")),
+      "image/png",
+    );
+  });
+}
+
+export type CopiedDocumentKind = "text" | "image" | "file";
+
+/**
+ * Copies the decrypted content rather than its temporary blob URL. Text uses
+ * the broadly-supported text clipboard path. Images are normalized to PNG,
+ * which is the binary clipboard format supported by mobile Chromium/WebKit.
+ * Other file types are offered only when the browser explicitly supports their
+ * MIME type; copying a blob URL would be useless outside this page.
+ */
+export async function copyDocument(
+  result: RecoveredDocument,
+): Promise<CopiedDocumentKind> {
+  const type = result.meta.type.toLowerCase().split(";", 1)[0].trim();
+  if (type.startsWith("text/") || type === "application/json") {
+    await copyText(new TextDecoder("utf-8", { fatal: false }).decode(result.content));
+    return "text";
+  }
+
+  if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
+    throw new Error(
+      type.startsWith("image/")
+        ? "The mobile app does not expose image clipboard access. Long-press the preview to copy or save the image."
+        : "This file type cannot be copied by the mobile clipboard. Open SoverStore on desktop to save the recovered file.",
+    );
+  }
+
+  let clipboardContent: Blob | Promise<Blob> = recoveredBlob(result);
+  let clipboardType = type || "application/octet-stream";
+  let copiedKind: CopiedDocumentKind = "file";
+  if (type.startsWith("image/")) {
+    copiedKind = "image";
+    if (clipboardType !== "image/png" || !ClipboardItem.supports(clipboardType)) {
+      clipboardType = "image/png";
+      clipboardContent = imageAsPng(result);
+    }
+  }
+  if (!ClipboardItem.supports(clipboardType)) {
+    throw new Error(
+      "This file type cannot be copied by the mobile clipboard. Open SoverStore on desktop to save the recovered file.",
+    );
+  }
+
+  try {
+    await navigator.clipboard.write([
+      // Passing the conversion promise lets write() start during the original
+      // click gesture; awaiting image conversion first makes mobile WebViews
+      // revoke clipboard access before the actual write begins.
+      new ClipboardItem({ [clipboardType]: clipboardContent }),
+    ]);
+  } catch (error) {
+    const reason = error instanceof Error ? ` ${error.message}` : "";
+    throw new Error(
+      `The mobile app did not allow this document to be copied.${reason}`,
+    );
+  }
+  return copiedKind;
+}
+
 export async function downloadDocument(
   result: RecoveredDocument,
 ): Promise<void> {

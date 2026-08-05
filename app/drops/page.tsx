@@ -48,6 +48,7 @@ import {
   loadOrCreateDropsEncryptionKey,
 } from "@/lib/drops/keys";
 import {
+  copyDocument,
   createDocumentUrl,
   documentPreviewKind,
   downloadDocument,
@@ -74,6 +75,13 @@ type OwnerActionState =
   | { status: "needs-allowance"; message: string }
   | { status: "error"; message: string }
   | { status: "done"; message: string };
+
+type AccountRoleState =
+  | { status: "idle" }
+  | { status: "checking"; address: string }
+  | { status: "buyer"; address: string }
+  | { status: "owner"; address: string }
+  | { status: "error"; address: string; message: string };
 
 type PublishRetry = {
   cid: string;
@@ -206,7 +214,9 @@ function parsePasPrice(value: string): bigint {
 
 export default function DropsPage() {
   const [drops, setDrops] = useState<DropInfo[]>([]);
-  const [owner, setOwner] = useState("");
+  const [accountRole, setAccountRole] = useState<AccountRoleState>({
+    status: "idle",
+  });
   const [buyerByDrop, setBuyerByDrop] = useState<Record<string, boolean>>({});
   const [localKeyByDrop, setLocalKeyByDrop] = useState<
     Record<string, "unknown" | "available" | "missing">
@@ -217,6 +227,7 @@ export default function DropsPage() {
   const [createDeadline, setCreateDeadline] = useState("");
   const [createState, setCreateState] = useState<OwnerActionState>({ status: "idle" });
   const [bulletinState, setBulletinState] = useState<OwnerActionState>({ status: "idle" });
+  const [bulletinResultAddress, setBulletinResultAddress] = useState<string | null>(null);
   const [fileByDrop, setFileByDrop] = useState<Record<string, File | undefined>>({});
   const [publishByDrop, setPublishByDrop] = useState<Record<string, OwnerActionState>>({});
   const [retryByDrop, setRetryByDrop] = useState<Record<string, PublishRetry | undefined>>({});
@@ -225,8 +236,9 @@ export default function DropsPage() {
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
   const clientRef = useRef<DropsContractClient | null>(null);
+  const clientPromiseRef = useRef<Promise<DropsContractClient> | null>(null);
   const objectUrlsRef = useRef(new Set<string>());
-  const ownerBulletinCheckRef = useRef<string | null>(null);
+  const publisherFlowRef = useRef<{ address: string; runId: number } | null>(null);
 
   const {
     selectedAccount: account,
@@ -245,15 +257,35 @@ export default function DropsPage() {
     [selectedAddress],
   );
 
-  const isOwner =
-    connectedEvm !== "" && owner.toLowerCase() === connectedEvm.toLowerCase();
+  const currentAccountRole =
+    accountRole.status !== "idle" && accountRole.address === selectedAddress
+      ? accountRole
+      : ({ status: "idle" } as const);
+  const isOwner = currentAccountRole.status === "owner";
+  const bulletinUsable =
+    bulletinResultAddress === selectedAddress &&
+    bulletinAllowance?.usable === true;
   const publisherReady =
     isOwner &&
-    bulletinAllowance?.usable === true &&
-    !checkingBulletinAllowance &&
-    bulletinState.status !== "working";
+    bulletinUsable &&
+    !checkingBulletinAllowance;
 
-  const updateBuyerStatus = useCallback(
+  const getReadClient = useCallback(async () => {
+    if (clientRef.current) return clientRef.current;
+    if (!clientPromiseRef.current) {
+      clientPromiseRef.current = createDropsContractClient();
+    }
+    const pending = clientPromiseRef.current;
+    try {
+      const client = await pending;
+      clientRef.current = client;
+      return client;
+    } finally {
+      if (clientPromiseRef.current === pending) clientPromiseRef.current = null;
+    }
+  }, []);
+
+  const readBuyerStatus = useCallback(
     async (client: DropsContractClient, evm: string, currentDrops: DropInfo[]) => {
       const entries = await mapWithConcurrency(
         currentDrops,
@@ -264,7 +296,6 @@ export default function DropsPage() {
         ] as const,
       );
       const statuses = Object.fromEntries(entries);
-      setBuyerByDrop(statuses);
       const keyStatuses: Record<string, "unknown" | "available" | "missing"> = {};
       for (const drop of currentDrops) {
         const key = drop.id.toString();
@@ -279,7 +310,7 @@ export default function DropsPage() {
           keyStatuses[key] = "unknown";
         }
       }
-      setLocalKeyByDrop(keyStatuses);
+      return { statuses, keyStatuses };
     },
     [],
   );
@@ -288,12 +319,8 @@ export default function DropsPage() {
     setLoading(true);
     setError(null);
     try {
-      const client = clientRef.current ?? await createDropsContractClient();
-      clientRef.current = client;
-      const [nextOwner, count] = await Promise.all([
-        client.owner(),
-        client.dropCount(),
-      ]);
+      const client = await getReadClient();
+      const count = await client.dropCount();
       const ids = Array.from(
         { length: Number(count) },
         (_, index) => count - BigInt(index),
@@ -303,21 +330,44 @@ export default function DropsPage() {
         READ_QUERY_CONCURRENCY,
         (id) => client.dropInfo(id),
       );
-      setOwner(nextOwner);
       setDrops(nextDrops);
-      if (connectedEvm) {
-        await updateBuyerStatus(client, connectedEvm, nextDrops);
-      }
     } catch (nextError) {
       setError(messageOf(nextError));
     } finally {
       setLoading(false);
     }
-  }, [connectedEvm, updateBuyerStatus]);
+  }, [getReadClient]);
 
   useEffect(() => {
+    if (!selectedAddress) {
+      setLoading(false);
+      return;
+    }
     void refresh();
-  }, [refresh]);
+  }, [refresh, selectedAddress]);
+
+  // A connected wallet is immediately sufficient for buyer actions. Buyer
+  // bookkeeping is read independently and never blocks the Buy button.
+  useEffect(() => {
+    let active = true;
+    if (!connectedEvm) {
+      setBuyerByDrop({});
+      setLocalKeyByDrop({});
+      return;
+    }
+    void (async () => {
+      const client = await getReadClient();
+      const next = await readBuyerStatus(client, connectedEvm, drops);
+      if (!active) return;
+      setBuyerByDrop(next.statuses);
+      setLocalKeyByDrop(next.keyStatuses);
+    })().catch((nextError) => {
+      if (active) setError(messageOf(nextError));
+    });
+    return () => {
+      active = false;
+    };
+  }, [connectedEvm, drops, getReadClient, readBuyerStatus]);
 
   useEffect(() => {
     const timer = window.setInterval(
@@ -335,114 +385,97 @@ export default function DropsPage() {
     };
   }, []);
 
-  // A wallet can already be connected from Storage (or restored by transport
-  // recovery), so the Drops Connect button is not guaranteed to run here.
-  // Once the contract identifies that address as owner, start exactly one
-  // publisher Bulletin readiness check for it.
-  useEffect(() => {
-    if (!account || !isOwner || bulletinAllowance !== undefined) {
-      if (!isOwner) ownerBulletinCheckRef.current = null;
-      return;
-    }
-    if (ownerBulletinCheckRef.current === account.address) return;
-    ownerBulletinCheckRef.current = account.address;
-    let active = true;
-    setBulletinState({
-      status: "working",
-      message: "Checking publisher Bulletin authorization...",
-    });
-    void ensureAccountBulletinReady(
-      account.address,
-      (message) => {
-        if (active) setBulletinState({ status: "working", message });
-      },
-    )
-      .then((next) => {
-        if (!active) return;
-        setKnownBulletinAllowance(account.address, next);
+  const startPublisherDiscovery = useCallback((address: string, force = false) => {
+    if (!force && publisherFlowRef.current?.address === address) return;
+    const runId = (publisherFlowRef.current?.runId ?? 0) + 1;
+    publisherFlowRef.current = { address, runId };
+    const evm = ss58ToH160(address);
+    const isCurrent = () =>
+      publisherFlowRef.current?.address === address &&
+      publisherFlowRef.current.runId === runId;
+
+    setAccountRole({ status: "checking", address });
+    setBulletinResultAddress(null);
+    setBulletinState({ status: "idle" });
+
+    void (async () => {
+      const client = await getReadClient();
+      const contractOwner = await client.owner();
+      if (!isCurrent()) return;
+
+      if (contractOwner.toLowerCase() !== evm.toLowerCase()) {
+        setAccountRole({ status: "buyer", address });
+        return;
+      }
+
+      // The address is now positively verified as the publisher. Only this
+      // branch may touch Bulletin; buyers are already free to purchase drops.
+      setAccountRole({ status: "owner", address });
+      setBulletinState({
+        status: "working",
+        message: "Preparing publisher Bulletin authorization...",
+      });
+      try {
+        // This is deliberately the same complete procedure used by Storage:
+        // lookup the account, preserve a usable grant, and request host-managed
+        // allocation only when the grant is missing or exhausted.
+        const next = await ensureAccountBulletinReady(
+          address,
+          (message) => {
+            if (isCurrent()) {
+              setBulletinState({ status: "working", message });
+            }
+          },
+        );
+        if (!isCurrent()) return;
+        setKnownBulletinAllowance(address, next);
+        setBulletinResultAddress(address);
         setBulletinState({
           status: "done",
           message: `Bulletin ready: ${formatNumber(next.remainingTransactions)} transaction(s), ${formatBytes(next.remainingBytes)} remaining.`,
         });
-      })
-      .catch((authorizationError) => {
-        if (!active) return;
-        if (
-          recoverTimedOutBulletinTransport(
-            account.address,
-            authorizationError,
-          )
-        ) {
-          return;
-        }
+      } catch (authorizationError) {
+        if (!isCurrent()) return;
+        if (recoverTimedOutBulletinTransport(address, authorizationError)) return;
         setBulletinState({
           status: "error",
           message: messageOf(authorizationError),
         });
+      }
+    })().catch((nextError) => {
+      if (!isCurrent()) return;
+      setAccountRole({
+        status: "error",
+        address,
+        message: messageOf(nextError),
       });
-    return () => {
-      active = false;
-    };
-  }, [
-    account,
-    bulletinAllowance,
-    isOwner,
-    setKnownBulletinAllowance,
-  ]);
+    });
+  }, [getReadClient, setKnownBulletinAllowance]);
+
+  // Also covers a wallet connected on Storage before navigating here and the
+  // address restored after a transport-recovery reload.
+  useEffect(() => {
+    if (!selectedAddress) {
+      publisherFlowRef.current = null;
+      setAccountRole({ status: "idle" });
+      setBulletinResultAddress(null);
+      setBulletinState({ status: "idle" });
+      return;
+    }
+    startPublisherDiscovery(selectedAddress);
+  }, [selectedAddress, startPublisherDiscovery]);
 
   const connect = useCallback(async () => {
     setError(null);
     try {
-      const account = await connectSessionWallet();
-      const evm = ss58ToH160(account.address);
-      const client = clientRef.current ?? await createDropsContractClient();
-      clientRef.current = client;
-      const currentOwner = owner || (await client.owner());
-      if (!owner) setOwner(currentOwner);
-
-      // Buyer-status is UI bookkeeping (per-drop isBuyer/encKeyOf reads), not
-      // a prerequisite for the Bulletin check below. Run it without blocking
-      // that check -- it can update the drop list whenever it lands.
-      void updateBuyerStatus(client, evm, drops).catch((nextError) => {
-        setError(messageOf(nextError));
-      });
-
-      // Buyers only connect their wallet. Bulletin allocation is requested
-      // exclusively for the contract owner who can publish files.
-      if (currentOwner.toLowerCase() === evm.toLowerCase()) {
-        setBulletinState({
-          status: "working",
-          message: "Preparing publisher Bulletin authorization...",
-        });
-        try {
-          const next = await ensureAccountBulletinReady(
-            account.address,
-            (message) => setBulletinState({ status: "working", message }),
-          );
-          setKnownBulletinAllowance(account.address, next);
-          setBulletinState({
-            status: "done",
-            message: `Bulletin ready: ${formatNumber(next.remainingTransactions)} transaction(s), ${formatBytes(next.remainingBytes)} remaining.`,
-          });
-        } catch (authorizationError) {
-          if (
-            recoverTimedOutBulletinTransport(
-              account.address,
-              authorizationError,
-            )
-          ) {
-            return;
-          }
-          setBulletinState({
-            status: "error",
-            message: messageOf(authorizationError),
-          });
-        }
-      }
+      const connected = await connectSessionWallet();
+      // Schedule publisher discovery, but do not await it. The context already
+      // exposes this account, so every Buy button becomes active immediately.
+      startPublisherDiscovery(connected.address);
     } catch (nextError) {
       setError(messageOf(nextError));
     }
-  }, [connectSessionWallet, drops, owner, setKnownBulletinAllowance, updateBuyerStatus]);
+  }, [connectSessionWallet, startPublisherDiscovery]);
 
   const buyDrop = useCallback(async (drop: DropInfo) => {
     const key = drop.id.toString();
@@ -459,8 +492,7 @@ export default function DropsPage() {
       [key]: { status: "working", message: "Re-reading buyer status and preparing the device key..." },
     }));
     try {
-      const readClient = clientRef.current ?? await createDropsContractClient();
-      clientRef.current = readClient;
+      const readClient = await getReadClient();
       const alreadyBuyer = await readClient.isBuyer(drop.id, connectedEvm);
       const registeredPublicKey = alreadyBuyer
         ? await readClient.encKeyOf(drop.id, connectedEvm)
@@ -519,7 +551,7 @@ export default function DropsPage() {
         [key]: { status: "error", message: friendlyBuyError(nextError) },
       }));
     }
-  }, [account, connectedEvm, refresh]);
+  }, [account, connectedEvm, getReadClient, refresh]);
 
   const createDrop = useCallback(async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -570,6 +602,7 @@ export default function DropsPage() {
       minimum,
     );
     setKnownBulletinAllowance(account.address, next);
+    setBulletinResultAddress(account.address);
     return next;
   }, [account, isOwner, setKnownBulletinAllowance]);
 
@@ -674,8 +707,7 @@ export default function DropsPage() {
           ...current,
           [key]: { status: "working", message: "Reading registered buyer keys..." },
         }));
-        const readClient = clientRef.current ?? await createDropsContractClient();
-        clientRef.current = readClient;
+        const readClient = await getReadClient();
         const buyerKeys = await readClient.buyerKeys(drop.id);
 
         const fileBytes = new Uint8Array(await file.arrayBuffer());
@@ -791,7 +823,7 @@ export default function DropsPage() {
         [key]: { status: "error", message: friendlyOwnerError(nextError) },
       }));
     }
-  }, [account, fileByDrop, isOwner, refresh, refreshBulletinAllowance, retryByDrop]);
+  }, [account, fileByDrop, getReadClient, isOwner, refresh, refreshBulletinAllowance, retryByDrop]);
 
   const openDrop = useCallback(async (drop: DropInfo) => {
     const key = drop.id.toString();
@@ -970,14 +1002,29 @@ export default function DropsPage() {
               {walletStatus === "connecting" ? "Connecting..." : "Connect Polkadot wallet"}
             </button>
           )}
-          <button className="btn btn-ghost" type="button" disabled={loading} onClick={() => void refresh()}>
+          <button
+            className="btn btn-ghost"
+            type="button"
+            disabled={loading || !selectedAddress}
+            onClick={() => {
+              void refresh();
+              if (selectedAddress) startPublisherDiscovery(selectedAddress, true);
+            }}
+          >
             Refresh drops
           </button>
         </div>
         {connectedSs58 && (
           <p className="drops-identity">
             Signing account <code>{connectedSs58}</code><br />
-            Contract address <code>{connectedEvm}</code>
+            Contract address <code>{connectedEvm}</code><br />
+            {currentAccountRole.status === "checking"
+              ? "Buyer actions ready. Checking publisher role..."
+              : currentAccountRole.status === "owner"
+                ? "Publisher account confirmed."
+                : currentAccountRole.status === "error"
+                  ? `Buyer actions ready. Publisher check failed: ${currentAccountRole.message}`
+                  : "Buyer actions ready."}
           </p>
         )}
       </header>
@@ -990,18 +1037,20 @@ export default function DropsPage() {
           <div className={`drops-bulletin-status${bulletinAllowanceError || bulletinState.status === "error" ? " is-error" : ""}`}>
             <div>
               <strong>Bulletin storage</strong>
-              {checkingBulletinAllowance || bulletinState.status === "working" ? (
-                <span>Checking on-chain authorization...</span>
-              ) : bulletinAllowanceError ? (
-                <span>{bulletinAllowanceError}</span>
-              ) : bulletinState.status === "error" && bulletinAllowance === undefined ? (
-                <span>{bulletinState.message}</span>
-              ) : bulletinAllowance?.usable ? (
+              {bulletinAllowance?.usable ? (
                 <span>
                   Authorized: {formatNumber(bulletinAllowance.remainingTransactions)} transaction(s), {formatBytes(bulletinAllowance.remainingBytes)} remaining
                   {bulletinAllowance.expiresAtBlock !== undefined && `; expires at block ${formatNumber(bulletinAllowance.expiresAtBlock)}`}
                   {bulletinAllowance.remainingBlocks !== undefined && ` (${formatNumber(bulletinAllowance.remainingBlocks)} blocks left)`}.
                 </span>
+              ) : checkingBulletinAllowance ? (
+                <span>Checking on-chain authorization...</span>
+              ) : bulletinState.status === "working" ? (
+                <span>{bulletinState.message}</span>
+              ) : bulletinAllowanceError ? (
+                <span>{bulletinAllowanceError}</span>
+              ) : bulletinState.status === "error" && bulletinAllowance === undefined ? (
+                <span>{bulletinState.message}</span>
               ) : bulletinAllowance?.expired ? (
                 <span>Authorization expired.</span>
               ) : bulletinAllowance?.exhausted ? (
@@ -1118,8 +1167,9 @@ export default function DropsPage() {
           <span>{drops.length} total / {publishedCount} published</span>
         </div>
 
-        {loading && drops.length === 0 && <p className="drops-empty">Reading public contract state...</p>}
-        {!loading && drops.length === 0 && <p className="drops-empty">No drops have been created yet.</p>}
+        {!selectedAddress && <p className="drops-empty">Connect the wallet to load available drops.</p>}
+        {selectedAddress && loading && drops.length === 0 && <p className="drops-empty">Reading public contract state...</p>}
+        {selectedAddress && !loading && drops.length === 0 && <p className="drops-empty">No drops have been created yet.</p>}
 
         {drops.map((drop) => {
           const key = drop.id.toString();
@@ -1294,6 +1344,10 @@ function DropDocumentPreview({
   downloadError?: string;
   onDownloadError: (message?: string) => void;
 }) {
+  const [copyStatus, setCopyStatus] = useState<{
+    kind: "success" | "error";
+    message: string;
+  } | null>(null);
   const kind = documentPreviewKind(document);
   const text = kind === "text"
     ? new TextDecoder("utf-8", { fatal: false }).decode(document.content)
@@ -1312,10 +1366,31 @@ function DropDocumentPreview({
       {kind === "pdf" && <iframe src={document.objectUrl} title={`Preview of ${document.meta.name}`} sandbox="" />}
       {kind === "text" && <pre>{text}</pre>}
       {kind === "unavailable" && <p>This file type cannot be previewed safely.</p>}
-      <button className="btn btn-ink" type="button" onClick={() => {
+      <button className="btn btn-pink" type="button" onClick={() => {
+        setCopyStatus(null);
+        void copyDocument(document)
+          .then((copiedKind) => setCopyStatus({
+            kind: "success",
+            message: copiedKind === "image"
+              ? "Image copied. Paste it into a message, email, notes, or another app."
+              : copiedKind === "text"
+                ? "Document text copied to the clipboard."
+                : "Document copied to the clipboard.",
+          }))
+          .catch((error) => setCopyStatus({
+            kind: "error",
+            message: messageOf(error),
+          }));
+      }}>Copy document</button>
+      <button className="btn btn-ink desktop-file-action" type="button" onClick={() => {
         onDownloadError(undefined);
         void downloadDocument(document).catch((error) => onDownloadError(messageOf(error)));
       }}>Save / share document</button>
+      {copyStatus && (
+        <p className={copyStatus.kind === "error" ? "drops-open-error" : "drops-open-status"}>
+          {copyStatus.message}
+        </p>
+      )}
       {downloadError && <p className="drops-open-error">{downloadError}</p>}
     </div>
   );
