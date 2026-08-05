@@ -49,7 +49,13 @@ type AppSession = {
 
 const AppSessionContext = createContext<AppSession | null>(null);
 
-export function AppSessionProvider({ children }: { children: ReactNode }) {
+export function AppSessionProvider({
+  children,
+  disableAutomaticBulletinCheck = false,
+}: {
+  children: ReactNode;
+  disableAutomaticBulletinCheck?: boolean;
+}) {
   const pathname = usePathname();
   const [wallet, setWallet] = useState<AppWalletSnapshot>(() =>
     getHostWalletSnapshot(),
@@ -60,7 +66,10 @@ export function AppSessionProvider({ children }: { children: ReactNode }) {
     error: bulletinAllowanceError,
     refresh: refreshBulletinAllowance,
     setKnownAllowance: setKnownBulletinAllowance,
-  } = useBulletinAllowance(wallet.selectedAddress, pathname === "/");
+  } = useBulletinAllowance(
+    wallet.selectedAddress,
+    !disableAutomaticBulletinCheck && pathname === "/",
+  );
 
   useEffect(() => {
     const sync = () => setWallet(getHostWalletSnapshot());
@@ -93,7 +102,7 @@ export function AppSessionProvider({ children }: { children: ReactNode }) {
     }
 
     return unsubscribe;
-  }, []);
+  }, [setKnownBulletinAllowance]);
 
   const connectWallet = useCallback(async () => {
     const accounts = await connectHostWallet();

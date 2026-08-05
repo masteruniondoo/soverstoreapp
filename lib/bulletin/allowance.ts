@@ -8,16 +8,6 @@ const AUTHORIZATION_CONFIRM_DELAY_MS = 1_000;
 const readinessChecks = new Map<string, Promise<Allowance>>();
 const allowanceLookups = new Map<string, Promise<Allowance | null>>();
 
-type AuthorizationRecord = {
-  extent?: {
-    transactions?: string | number | bigint;
-    transactions_allowance?: string | number | bigint;
-    bytes?: string | number | bigint;
-    bytes_allowance?: string | number | bigint;
-  };
-  expiration: string | number | bigint;
-};
-
 export interface Allowance {
   remainingTransactions: bigint;
   remainingBytes: bigint;

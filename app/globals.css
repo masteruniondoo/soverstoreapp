@@ -616,6 +616,158 @@ code {
   letter-spacing: -0.025em;
 }
 
+.drop-share-actions {
+  display: grid;
+  gap: 12px;
+  margin-top: 20px;
+  padding: 16px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+}
+
+.drop-share-actions.is-compact {
+  margin: -7px 0 20px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.drop-share-actions code {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.drop-share-actions .actions-row {
+  margin-top: 0;
+}
+
+.drop-share-actions small {
+  color: var(--ink-60);
+}
+
+.open-drop-link {
+  display: grid;
+  gap: 12px;
+  margin: 22px 0;
+  padding: 16px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  background: var(--card);
+}
+
+.open-drop-link > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.open-drop-link > div:first-child span {
+  color: var(--ink-60);
+  font-size: 13px;
+}
+
+.open-drop-link-controls {
+  display: flex;
+  gap: 10px;
+}
+
+.open-drop-link-controls input {
+  min-width: 0;
+  flex: 1;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+}
+
+.open-drop-link.is-compact {
+  max-width: 720px;
+  margin-bottom: 18px;
+  background: color-mix(in srgb, var(--card) 72%, transparent);
+}
+
+.open-drop-link .drops-open-error {
+  margin: 0;
+}
+
+@media (max-width: 620px) {
+  .open-drop-link-controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
+.drop-share-actions .btn,
+.app-required-actions .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
+.app-required-page {
+  min-height: 100svh;
+  display: grid;
+  align-content: center;
+  justify-items: start;
+}
+
+.app-required-page h1 {
+  max-width: 14ch;
+  margin: 12px 0 18px;
+  font-size: clamp(38px, 8vw, 66px);
+  line-height: 0.98;
+  letter-spacing: -0.045em;
+}
+
+.app-required-page > p {
+  max-width: 58ch;
+  margin: 0;
+  color: var(--ink-60);
+}
+
+.app-required-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 28px;
+}
+
+.app-required-steps {
+  margin: 24px 0 0;
+  padding-left: 22px;
+  color: var(--ink-60);
+}
+
+.app-required-steps li + li {
+  margin-top: 8px;
+}
+
+.app-required-url {
+  max-width: 100%;
+  margin-top: 22px;
+  padding: 11px 13px;
+  overflow-wrap: anywhere;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  font-size: 12px;
+}
+
+.app-required-page .app-required-hint {
+  margin-top: 18px;
+  font-size: 13px;
+}
+
+.app-required-loading {
+  min-height: 100svh;
+  display: grid;
+  align-content: center;
+  gap: 10px;
+}
+
 .drops-facts {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

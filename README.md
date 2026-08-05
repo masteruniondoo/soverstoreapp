@@ -70,9 +70,26 @@ These optional variables are embedded in the browser bundle at build time:
 | Variable | Default |
 | --- | --- |
 | `NEXT_PUBLIC_APP_ORIGIN` | `https://soverstore.dev-dot.li` |
+| `NEXT_PUBLIC_DROP_ORIGIN` | Inherits `NEXT_PUBLIC_APP_ORIGIN` |
 | `NEXT_PUBLIC_BULLETIN_NETWORK_NAME` | `Products Devnet Bulletin` |
 | `NEXT_PUBLIC_BULLETIN_NETWORK_ID` | `devnet-bulletin` |
 | `NEXT_PUBLIC_BULLETIN_IPFS_GATEWAY` | `https://devnet-ipfs.api.polkadotcommunity.foundation` |
+
+## App-only Drop links
+
+Every created Drop exposes exactly one app-only Browse address:
+
+```text
+soverstore.dot/drop/<dropId>
+```
+
+Copy it and paste it into Browse in Polkadot Desktop, where the pathname is
+preserved and opens the Drop directly. Mobile Browse does not reliably
+preserve a pasted pathname, so on mobile open the Drops page in SoverStore and
+enter the link (or the bare Drop ID) into **Open a shared Drop**. SoverStore
+does not generate a Chrome/Safari share URL and does not attempt to launch or
+install a native host from a web browser. See
+[POLKADOT_APP_LINK_INTEGRATION.md](POLKADOT_APP_LINK_INTEGRATION.md).
 
 Do not store a mnemonic, private key, password, or other secret in this
 repository or in a `NEXT_PUBLIC_*` variable. All `NEXT_PUBLIC_*` values are

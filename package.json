@@ -1,11 +1,13 @@
 {
   "name": "soverstore",
-  "version": "0.1.61",
+  "version": "0.1.71",
+  "type": "module",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "lint": "next lint"
+    "lint": "eslint .",
+    "test": "node --test tests/drop-route.test.mjs tests/runtime-classification.test.mjs tests/smart-contract-allocation.test.mjs"
   },
   "dependencies": {
     "@parity/bulletin-sdk": "^0.3.0",
@@ -27,6 +29,8 @@
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "eslint": "^9.0.0",
+    "eslint-config-next": "15.5.22",
     "typescript": "^5"
   }
 }

@@ -11,6 +11,7 @@ import {
   type SignerAccount,
   type SignerState,
 } from "@parity/product-sdk/wallet";
+import { SmartContractAllocationCoordinator } from "@/lib/wallet/smart-contract-allocation";
 
 export type AppWalletAccount = {
   address: string;
@@ -38,6 +39,13 @@ const HOST_RESOURCE_TIMEOUT_MS = 30_000;
 const HOST_RELOAD_DELAY_MS = 2_500;
 let connectPromise: Promise<AppWalletAccount[]> | null = null;
 let chainSubmitPermissionVerified = false;
+const smartContractAllocation = new SmartContractAllocationCoordinator(
+  () => typeof window === "undefined" ? null : window.sessionStorage,
+  undefined,
+  () => console.warn(
+    "[soverstore] Smart-contract allocation response timed out; continuing with host-side implicit allocation.",
+  ),
+);
 let hostWasConnected = hostManager.getState().status === "connected";
 let hostReloadTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -55,6 +63,10 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
       },
     );
   });
+}
+
+export function forgetSmartContractAllowance(address: string): void {
+  smartContractAllocation.forget(address);
 }
 
 function currentSigner(address: string): PolkadotSigner | null {
@@ -194,14 +206,15 @@ async function ensureResourceAllowance(
   }
 }
 
-export function ensureSmartContractAllowance(): Promise<void> {
-  return ensureResourceAllowance(
-    {
-      tag: "SmartContractAllowance",
-      value: 0,
-    },
-    "Smart-contract transaction",
-  );
+export function ensureSmartContractAllowance(address: string): Promise<void> {
+  return smartContractAllocation.ensure(address, () =>
+    ensureResourceAllowance(
+      {
+        tag: "SmartContractAllowance",
+        value: 0,
+      },
+      "Smart-contract transaction",
+    ));
 }
 
 export function ensureBulletinAllowance(): Promise<void> {

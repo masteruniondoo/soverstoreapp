@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { BulletinError, MAX_FILE_SIZE } from "@parity/bulletin-sdk";
 import { useAppSession } from "@/components/AppSessionProvider";
+import { OpenDropLinkForm } from "@/components/drops/OpenDropLinkForm";
 import { Nav } from "@/components/Nav";
 import PreviewPage from "@/app/preview/page";
 import {
@@ -302,6 +303,8 @@ function StorageHome() {
       <h1 className="app-title">
         Encrypt locally. Upload to decentralized storage. Download recovery.
       </h1>
+
+      <OpenDropLinkForm />
 
       <section className="rail" aria-label="Connection status">
         <div className="rail-row">

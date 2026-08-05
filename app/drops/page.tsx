@@ -4,6 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MAX_FILE_SIZE } from "@parity/bulletin-sdk";
 import { ss58ToH160 } from "@parity/product-sdk/address";
 import { useAppSession } from "@/components/AppSessionProvider";
+import { OpenDropLinkForm } from "@/components/drops/OpenDropLinkForm";
+import { DropShareActions } from "@/components/drops/DropShareActions";
+import { useFocusedDropId } from "@/components/drops/DropRouteContext";
 import {
   isBulletinTransportTimeout,
   recoverTimedOutBulletinTransport,
@@ -213,11 +216,13 @@ function parsePasPrice(value: string): bigint {
 }
 
 export default function DropsPage() {
+  const focusedDropId = useFocusedDropId();
   const [drops, setDrops] = useState<DropInfo[]>([]);
   const [accountRole, setAccountRole] = useState<AccountRoleState>({
     status: "idle",
   });
   const [buyerByDrop, setBuyerByDrop] = useState<Record<string, boolean>>({});
+  const [buyerResultEvm, setBuyerResultEvm] = useState<string | null>(null);
   const [localKeyByDrop, setLocalKeyByDrop] = useState<
     Record<string, "unknown" | "available" | "missing">
   >({});
@@ -226,6 +231,10 @@ export default function DropsPage() {
   const [createPrice, setCreatePrice] = useState("1");
   const [createDeadline, setCreateDeadline] = useState("");
   const [createState, setCreateState] = useState<OwnerActionState>({ status: "idle" });
+  const [createdDrop, setCreatedDrop] = useState<{
+    id: string;
+    title: string;
+  } | null>(null);
   const [bulletinState, setBulletinState] = useState<OwnerActionState>({ status: "idle" });
   const [bulletinResultAddress, setBulletinResultAddress] = useState<string | null>(null);
   const [fileByDrop, setFileByDrop] = useState<Record<string, File | undefined>>({});
@@ -233,6 +242,7 @@ export default function DropsPage() {
   const [retryByDrop, setRetryByDrop] = useState<Record<string, PublishRetry | undefined>>({});
   const [openByDrop, setOpenByDrop] = useState<Record<string, OpenState>>({});
   const [loading, setLoading] = useState(true);
+  const [focusedDropMissing, setFocusedDropMissing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
   const clientRef = useRef<DropsContractClient | null>(null);
@@ -320,6 +330,17 @@ export default function DropsPage() {
     setError(null);
     try {
       const client = await getReadClient();
+      if (focusedDropId) {
+        const drop = await client.dropInfo(BigInt(focusedDropId));
+        if (drop.payDeadline === 0n) {
+          setDrops([]);
+          setFocusedDropMissing(true);
+        } else {
+          setDrops([drop]);
+          setFocusedDropMissing(false);
+        }
+        return;
+      }
       const count = await client.dropCount();
       const ids = Array.from(
         { length: Number(count) },
@@ -336,15 +357,15 @@ export default function DropsPage() {
     } finally {
       setLoading(false);
     }
-  }, [getReadClient]);
+  }, [focusedDropId, getReadClient]);
 
   useEffect(() => {
-    if (!selectedAddress) {
+    if (!selectedAddress && !focusedDropId) {
       setLoading(false);
       return;
     }
     void refresh();
-  }, [refresh, selectedAddress]);
+  }, [focusedDropId, refresh, selectedAddress]);
 
   // A connected wallet is immediately sufficient for buyer actions. Buyer
   // bookkeeping is read independently and never blocks the Buy button.
@@ -353,14 +374,17 @@ export default function DropsPage() {
     if (!connectedEvm) {
       setBuyerByDrop({});
       setLocalKeyByDrop({});
+      setBuyerResultEvm(null);
       return;
     }
+    setBuyerResultEvm(null);
     void (async () => {
       const client = await getReadClient();
       const next = await readBuyerStatus(client, connectedEvm, drops);
       if (!active) return;
       setBuyerByDrop(next.statuses);
       setLocalKeyByDrop(next.keyStatuses);
+      setBuyerResultEvm(connectedEvm);
     })().catch((nextError) => {
       if (active) setError(messageOf(nextError));
     });
@@ -455,6 +479,13 @@ export default function DropsPage() {
   // Also covers a wallet connected on Storage before navigating here and the
   // address restored after a transport-recovery reload.
   useEffect(() => {
+    if (focusedDropId) {
+      publisherFlowRef.current = null;
+      setAccountRole({ status: "idle" });
+      setBulletinResultAddress(null);
+      setBulletinState({ status: "idle" });
+      return;
+    }
     if (!selectedAddress) {
       publisherFlowRef.current = null;
       setAccountRole({ status: "idle" });
@@ -463,7 +494,7 @@ export default function DropsPage() {
       return;
     }
     startPublisherDiscovery(selectedAddress);
-  }, [selectedAddress, startPublisherDiscovery]);
+  }, [focusedDropId, selectedAddress, startPublisherDiscovery]);
 
   const connect = useCallback(async () => {
     setError(null);
@@ -471,11 +502,11 @@ export default function DropsPage() {
       const connected = await connectSessionWallet();
       // Schedule publisher discovery, but do not await it. The context already
       // exposes this account, so every Buy button becomes active immediately.
-      startPublisherDiscovery(connected.address);
+      if (!focusedDropId) startPublisherDiscovery(connected.address);
     } catch (nextError) {
       setError(messageOf(nextError));
     }
-  }, [connectSessionWallet, startPublisherDiscovery]);
+  }, [connectSessionWallet, focusedDropId, startPublisherDiscovery]);
 
   const buyDrop = useCallback(async (drop: DropInfo) => {
     const key = drop.id.toString();
@@ -567,6 +598,7 @@ export default function DropsPage() {
       return;
     }
     setCreateState({ status: "working", message: "Validating drop details..." });
+    setCreatedDrop(null);
     try {
       const name = createName.trim();
       if (!name) throw new Error("Public announced name is required.");
@@ -582,7 +614,9 @@ export default function DropsPage() {
       const result = await client.createDrop(name, price, deadline, {
         onStatus: (status) => setCreateState({ status: "working", message: `Transaction: ${status}` }),
       });
+      const createdId = (await client.dropCount()).toString();
       setCreateState({ status: "done", message: `Drop created. Transaction ${result.txHash}` });
+      setCreatedDrop({ id: createdId, title: name });
       setCreateName("");
       setCreateDeadline("");
       await refresh();
@@ -989,6 +1023,7 @@ export default function DropsPage() {
           Payments, buyer keys and envelopes are public on Asset Hub. Files are
           public on Bulletin. Only cryptography decides who can read them.
         </p>
+        {!focusedDropId && <OpenDropLinkForm compact />}
         <div className="drops-toolbar">
           {connectedSs58 ? (
             <span className="btn btn-ink wallet-connected-badge">Wallet connected</span>
@@ -1005,10 +1040,10 @@ export default function DropsPage() {
           <button
             className="btn btn-ghost"
             type="button"
-            disabled={loading || !selectedAddress}
+            disabled={loading || (!selectedAddress && !focusedDropId)}
             onClick={() => {
               void refresh();
-              if (selectedAddress) startPublisherDiscovery(selectedAddress, true);
+              if (selectedAddress && !focusedDropId) startPublisherDiscovery(selectedAddress, true);
             }}
           >
             Refresh drops
@@ -1029,7 +1064,7 @@ export default function DropsPage() {
         )}
       </header>
 
-      {isOwner && (
+      {isOwner && !focusedDropId && (
         <section className="drops-owner-panel">
           <div className="story-kicker">Owner account</div>
           <h2>Publisher controls</h2>
@@ -1148,6 +1183,11 @@ export default function DropsPage() {
               {createState.message}
             </p>
           )}
+          {createState.status === "done" && createdDrop && (
+            <DropShareActions
+              dropId={createdDrop.id}
+            />
+          )}
         </section>
       )}
 
@@ -1162,18 +1202,22 @@ export default function DropsPage() {
         <div className="drops-list-heading">
           <div>
             <span className="story-kicker">Devnet contract</span>
-            <h2>Available drops</h2>
+            <h2>{focusedDropId ? "Drop details" : "Available drops"}</h2>
           </div>
-          <span>{drops.length} total / {publishedCount} published</span>
+          {!focusedDropId && <span>{drops.length} total / {publishedCount} published</span>}
         </div>
 
-        {!selectedAddress && <p className="drops-empty">Connect the wallet to load available drops.</p>}
-        {selectedAddress && loading && drops.length === 0 && <p className="drops-empty">Reading public contract state...</p>}
-        {selectedAddress && !loading && drops.length === 0 && <p className="drops-empty">No drops have been created yet.</p>}
+        {!focusedDropId && !selectedAddress && <p className="drops-empty">Connect the wallet to load available drops.</p>}
+        {loading && drops.length === 0 && (selectedAddress || focusedDropId) && <p className="drops-empty">Reading public contract state...</p>}
+        {!focusedDropId && selectedAddress && !loading && drops.length === 0 && <p className="drops-empty">No drops have been created yet.</p>}
+        {focusedDropId && !loading && focusedDropMissing && <p className="drops-empty">Drop #{focusedDropId} was not found.</p>}
 
         {drops.map((drop) => {
           const key = drop.id.toString();
           const isBuyer = buyerByDrop[key] === true;
+          const checkingBuyerAccess = Boolean(
+            account && buyerResultEvm !== connectedEvm,
+          );
           const missingPaidKey = isBuyer && localKeyByDrop[key] === "missing";
           const buyState = buyByDrop[key] ?? { status: "idle" as const };
           const openState = openByDrop[key] ?? { status: "idle" as const };
@@ -1191,6 +1235,7 @@ export default function DropsPage() {
                 </span>
               </div>
               <h2>{drop.name}</h2>
+              <DropShareActions dropId={key} compact />
               <dl className="drops-facts">
                 <div><dt>Price</dt><dd>{formatPas(drop.price)}</dd></div>
                 <div><dt>Payment deadline</dt><dd>{formatDeadline(drop.payDeadline)}</dd></div>
@@ -1200,7 +1245,9 @@ export default function DropsPage() {
               {inSale && (
                 <div className="drops-card-message">
                   <strong>{countdown(drop.payDeadline, now)}</strong>
-                  {missingPaidKey ? (
+                  {checkingBuyerAccess ? (
+                    <p>Checking whether this wallet already owns access...</p>
+                  ) : missingPaidKey ? (
                     <p className="drops-inline-danger">This address paid, but its original local encryption key is missing. Do not create a replacement; it cannot open the future envelope.</p>
                   ) : isBuyer ? (
                     <p>Access purchased. The file becomes available shortly after the payment deadline.</p>
@@ -1210,10 +1257,14 @@ export default function DropsPage() {
                       <button
                         className="btn btn-pink drops-buy-button"
                         type="button"
-                        disabled={!account || buyState.status === "working"}
-                        onClick={() => void buyDrop(drop)}
+                        disabled={buyState.status === "working" || walletStatus === "connecting"}
+                        onClick={() => account ? void buyDrop(drop) : void connect()}
                       >
-                        {buyState.status === "working" ? "Buying..." : "Buy access"}
+                        {buyState.status === "working"
+                          ? "Buying..."
+                          : walletStatus === "connecting"
+                            ? "Connecting..."
+                            : "Buy access"}
                       </button>
                       {!account && <small>Connect the Polkadot wallet above to buy.</small>}
                     </>
@@ -1245,7 +1296,7 @@ export default function DropsPage() {
                 </div>
               )}
 
-              {isOwner && closed && (
+              {isOwner && !focusedDropId && closed && (
                 <div className="drops-publish-panel">
                   <div>
                     <span className="story-kicker">Owner publication</span>

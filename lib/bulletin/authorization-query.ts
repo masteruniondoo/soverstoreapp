@@ -16,6 +16,8 @@ const RETRY_DELAY_MS = 1_500;
  */
 function waitForHostConnected(timeoutMs: number): Promise<void> {
   return new Promise((resolve, reject) => {
+    // The subscription callback may fire synchronously before assignment.
+    // eslint-disable-next-line prefer-const
     let unsubscribe: (() => void) | undefined;
     let cleanupAfterSubscribe = false;
     let settled = false;

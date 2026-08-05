@@ -10,6 +10,7 @@ import { devnet_asset_hub } from "@parity/product-sdk-descriptors/devnet-asset-h
 import {
   ensureSmartContractAllowance,
   ensureTransactionSigningPermission,
+  forgetSmartContractAllowance,
   type AppWalletAccount,
 } from "@/lib/wallet";
 
@@ -177,18 +178,32 @@ function requireAddressArray(value: unknown, label: string): string[] {
   return value as string[];
 }
 
-async function receipt(resultPromise: Promise<unknown>): Promise<DropsTxReceipt> {
-  const result = await resultPromise as RawTxResult;
-  if (!result.ok) throw result.error;
-  if (!result.value?.ok) {
-    throw new Error(`Transaction dispatch failed: ${messageOf(result.value?.dispatchError)}`);
+function invalidatesSmartContractAllowance(error: unknown): boolean {
+  return messageOf(error).toLowerCase().includes("no allowance set for account");
+}
+
+async function receipt(
+  resultPromise: Promise<unknown>,
+  allowanceAddress?: string,
+): Promise<DropsTxReceipt> {
+  try {
+    const result = await resultPromise as RawTxResult;
+    if (!result.ok) throw result.error;
+    if (!result.value?.ok) {
+      throw new Error(`Transaction dispatch failed: ${messageOf(result.value?.dispatchError)}`);
+    }
+    return {
+      txHash: result.value.txHash,
+      blockHash: result.value.block.hash,
+      blockNumber: result.value.block.number,
+      events: result.value.events,
+    };
+  } catch (error) {
+    if (allowanceAddress && invalidatesSmartContractAllowance(error)) {
+      forgetSmartContractAllowance(allowanceAddress);
+    }
+    throw error;
   }
-  return {
-    txHash: result.value.txHash,
-    blockHash: result.value.block.hash,
-    blockNumber: result.value.block.number,
-    events: result.value.events,
-  };
 }
 
 function txOptions(options?: DropsTxOptions) {
@@ -281,7 +296,10 @@ export class DropsContractClient {
 
   async createDrop(name: string, price: bigint, payDeadline: bigint, options?: DropsTxOptions): Promise<DropsTxReceipt> {
     requireSigner(this.account);
-    return receipt(this.contract.createDrop.tx(name, price, payDeadline, txOptions(options)));
+    return receipt(
+      this.contract.createDrop.tx(name, price, payDeadline, txOptions(options)),
+      this.account?.address,
+    );
   }
 
   async buy(id: bigint, publicKeyRaw: Uint8Array, price: bigint, options?: DropsTxOptions): Promise<DropsTxReceipt> {
@@ -289,7 +307,7 @@ export class DropsContractClient {
     return receipt(this.contract.buy.tx(id, bytesToHex(publicKeyRaw), {
       ...txOptions(options),
       value: contractPriceToSdkValue(price),
-    }));
+    }), this.account?.address);
   }
 
   async addEnvelopes(id: bigint, buyers: string[], envelopes: Uint8Array[], options?: DropsTxOptions): Promise<DropsTxReceipt> {
@@ -299,12 +317,15 @@ export class DropsContractClient {
       buyers,
       envelopes.map(bytesToHex),
       txOptions(options),
-    ));
+    ), this.account?.address);
   }
 
   async publish(id: bigint, cid: string, options?: DropsTxOptions): Promise<DropsTxReceipt> {
     requireSigner(this.account);
-    return receipt(this.contract.publish.tx(id, cid, txOptions(options)));
+    return receipt(
+      this.contract.publish.tx(id, cid, txOptions(options)),
+      this.account?.address,
+    );
   }
 
   async withdraw(to: string, options?: DropsTxOptions): Promise<DropsTxReceipt> {
@@ -320,7 +341,7 @@ export class DropsContractClient {
     return receipt(this.contract.withdraw.tx(to, {
       ...txOptions(options),
       gasLimit,
-    }));
+    }), this.account?.address);
   }
 }
 
@@ -331,14 +352,19 @@ export async function createDropsContractClient(
   if (account) {
     // Resource allocation belongs to contract actions, not wallet connection:
     // hosts that cannot allocate must not prevent the user from connecting.
-    await ensureSmartContractAllowance();
+    await ensureSmartContractAllowance(account.address);
     await ensureTransactionSigningPermission();
     const mapped = await ensureContractAccountMapped(
       contractRuntime,
       account.address,
       account.polkadotSigner as PolkadotSigner,
     );
-    if (!mapped.ok) throw mapped.error;
+    if (!mapped.ok) {
+      if (invalidatesSmartContractAllowance(mapped.error)) {
+        forgetSmartContractAllowance(account.address);
+      }
+      throw mapped.error;
+    }
   }
   const contract = createContract(
     contractRuntime,
