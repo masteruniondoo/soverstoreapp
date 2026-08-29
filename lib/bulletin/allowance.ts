@@ -1,12 +1,22 @@
 import { ensureBulletinAllowance } from "@/lib/wallet";
 import { queryAccountAuthorization } from "./authorization-query";
+import { requestFaucetAllowance } from "./faucet";
 import { clearBulletinTransportRecovery } from "./recovery";
 import type { StoreAuthorization } from "./store";
 
 const AUTHORIZATION_CONFIRM_ATTEMPTS = 12;
 const AUTHORIZATION_CONFIRM_DELAY_MS = 1_000;
+const MOBILE_RESPONSE_REMINDER_MS = 12_000;
+const MOBILE_RESPONSE_DIAGNOSTIC_MS = 45_000;
 const readinessChecks = new Map<string, Promise<Allowance>>();
 const allowanceLookups = new Map<string, Promise<Allowance | null>>();
+
+function isAllocationResponseTimeout(error: unknown): error is Error {
+  return (
+    error instanceof Error &&
+    error.message.includes("Bulletin storage allocation timed out")
+  );
+}
 
 export interface Allowance {
   remainingTransactions: bigint;
@@ -114,24 +124,49 @@ export function fetchAllowance(
 
 /**
  * Requests the host-managed Bulletin allowance and does not report success
- * until the grant is visible and usable on the chain. This replaces the old
- * second, in-app Eve faucet flow with the Product host's single resource path.
+ * until the grant is visible and usable on the chain.
  */
-export async function requestAllowance(
+async function requestHostAllowance(
   address: string,
   onProgress: (message: string) => void,
   minimum?: StoreAuthorization,
 ): Promise<Allowance> {
   onProgress("Requesting Bulletin storage allowance from the Product host...");
-  await ensureBulletinAllowance();
-  onProgress("Allowance allocated. Waiting for on-chain confirmation...");
+  const reminder = setTimeout(() => {
+    onProgress(
+      "Waiting for mobile approval or for Polkadot Desktop to return the result...",
+    );
+  }, MOBILE_RESPONSE_REMINDER_MS);
+  const diagnostic = setTimeout(() => {
+    onProgress("Still waiting for the Desktop/mobile bridge. Keep both apps open...");
+  }, MOBILE_RESPONSE_DIAGNOSTIC_MS);
+  let allocationError: Error | undefined;
+  try {
+    await ensureBulletinAllowance();
+  } catch (error) {
+    if (!isAllocationResponseTimeout(error)) throw error;
+    // The bridge response can be lost after the phone has approved and the
+    // host has submitted the allocation. Treat the chain record as the source
+    // of truth before reporting that timeout as a failure.
+    allocationError = error;
+  } finally {
+    clearTimeout(reminder);
+    clearTimeout(diagnostic);
+  }
+  onProgress(
+    allocationError
+      ? "Desktop response was delayed. Checking Bulletin directly..."
+      : "Allowance allocated. Waiting for on-chain confirmation...",
+  );
 
-  let lastError: unknown;
+  let lastError: unknown = allocationError;
   let lastAllowance: Allowance | null = null;
   for (let attempt = 1; attempt <= AUTHORIZATION_CONFIRM_ATTEMPTS; attempt += 1) {
     try {
-      const allowance = await fetchAllowance(address);
-      lastError = undefined;
+      // Always issue a new storage read while waiting for a grant. This also
+      // makes the polling intent explicit if fetchAllowance gains caching.
+      const allowance = await fetchAllowance(address, true, true);
+      lastError = allocationError;
       lastAllowance = allowance;
       if (
         allowance?.usable &&
@@ -165,6 +200,42 @@ export async function requestAllowance(
   );
 }
 
+/**
+ * Requests a usable Bulletin allowance for `address`, reporting only
+ * informational progress -- no button beyond the initial connect is ever
+ * required. Tries the Product host's resource-allocation path first (the
+ * intended mechanism, subject to a Desktop/mobile round-trip); if that does
+ * not produce a usable on-chain allowance for any reason, falls back
+ * automatically to the Devnet //Eve faucet (see faucet.ts), which has no
+ * host round-trip to get stuck on.
+ */
+export async function requestAllowance(
+  address: string,
+  onProgress: (message: string) => void,
+  minimum?: StoreAuthorization,
+): Promise<Allowance> {
+  try {
+    return await requestHostAllowance(address, onProgress, minimum);
+  } catch (hostError) {
+    console.warn(
+      "[soverstore:bulletin] Host-managed allocation did not confirm; falling back to the Devnet faucet.",
+      hostError,
+    );
+    onProgress(
+      "Product host allocation did not confirm. Requesting Bulletin storage allowance from the Devnet faucet instead...",
+    );
+    await requestFaucetAllowance(address, onProgress, minimum);
+    onProgress("Faucet authorization finalized. Confirming on Bulletin...");
+    const allowance = await fetchAllowance(address, true, true);
+    if (allowance && satisfiesMinimum(allowance, minimum)) {
+      return allowance;
+    }
+    throw new Error(
+      "The Devnet faucet authorization finalized, but the usable on-chain allowance was still not visible. Retry the authorization check.",
+    );
+  }
+}
+
 function satisfiesMinimum(
   allowance: Allowance,
   minimum?: StoreAuthorization,
@@ -193,11 +264,11 @@ export function ensureAccountBulletinReady(
 
   const pending = (async () => {
     onProgress("Looking up this account on Bulletin...");
-    const current = await fetchAllowance(address);
+    // Read both the authorization and the current Bulletin block. Existence
+    // alone is insufficient: an expired record can still retain positive
+    // counters and would otherwise be mistaken for a usable allowance.
+    const current = await fetchAllowance(address, true);
     if (current && satisfiesMinimum(current, minimum)) {
-      // This is intentionally the same single-address lookup as Bulletin
-      // Dashboard's "Lookup Account" action. Expiration height is checked only
-      // immediately before an upload, where the additional read is relevant.
       onProgress("Existing Bulletin authorization is ready.");
       return current;
     }

@@ -91,7 +91,7 @@ export function DropEntryRoute({ dropId }: { dropId: string }) {
   }
 
   return (
-    <AppSessionProvider disableAutomaticBulletinCheck>
+    <AppSessionProvider>
       <DropRouteProvider dropId={dropId}>
         <DropsPage />
       </DropRouteProvider>

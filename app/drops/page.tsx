@@ -651,9 +651,10 @@ export default function DropsPage() {
         message: `Bulletin ready: ${formatNumber(next.remainingTransactions)} transaction(s), ${formatBytes(next.remainingBytes)} remaining.`,
       });
     } catch (nextError) {
+      if (account && recoverTimedOutBulletinTransport(account.address, nextError)) return;
       setBulletinState({ status: "error", message: messageOf(nextError) });
     }
-  }, [allocateBulletin]);
+  }, [account, allocateBulletin]);
 
   const authorizeBulletin = useCallback(async (drop: DropInfo) => {
     const key = drop.id.toString();
@@ -681,12 +682,13 @@ export default function DropsPage() {
         },
       }));
     } catch (nextError) {
+      if (account && recoverTimedOutBulletinTransport(account.address, nextError)) return;
       setPublishByDrop((current) => ({
         ...current,
         [key]: { status: "error", message: messageOf(nextError) },
       }));
     }
-  }, [allocateBulletin, fileByDrop]);
+  }, [account, allocateBulletin, fileByDrop]);
 
   const publishDrop = useCallback(async (drop: DropInfo) => {
     const key = drop.id.toString();

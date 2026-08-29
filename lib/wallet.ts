@@ -35,7 +35,11 @@ const hostManager = new SignerManager({
       : new DevProvider(),
 });
 const HOST_PERMISSION_TIMEOUT_MS = 15_000;
-const HOST_RESOURCE_TIMEOUT_MS = 30_000;
+// The host can keep a first-time mobile allocation prompt open for 60 seconds.
+// Leave enough time for the decision to travel back over the Desktop bridge;
+// a 30-second deadline could reject an approval that was still being handled.
+const HOST_RESOURCE_TIMEOUT_MS = 90_000;
+const HOST_POST_CONNECT_SETTLE_MS = 2_500;
 const HOST_RELOAD_DELAY_MS = 2_500;
 let connectPromise: Promise<AppWalletAccount[]> | null = null;
 let chainSubmitPermissionVerified = false;
@@ -63,6 +67,10 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
       },
     );
   });
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export function forgetSmartContractAllowance(address: string): void {
@@ -239,6 +247,13 @@ export async function connectHostWallet(): Promise<AppWalletAccount[]> {
       if (!state.selectedAccount) {
         throw new Error("Host wallet returned no accounts.");
       }
+
+      // A newly paired phone can still be dismissing its non-cancellable
+      // "Connecting device" modal when SignerManager reports connected. If a
+      // resource prompt is sent in that window, the phone may show/accept it
+      // while Desktop never receives the outcome. Existing sessions bypass
+      // this path, so only a fresh connection pays this short grace period.
+      await delay(HOST_POST_CONNECT_SETTLE_MS);
       return orderedAccounts(hostManager.getState());
     })().finally(() => {
       connectPromise = null;

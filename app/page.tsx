@@ -118,31 +118,64 @@ function StorageHome() {
     setError(null);
     setBusy(true);
     setProgress("Connecting wallet...");
-    let connectedAddress: string | null = null;
     try {
-      const account = await connectSessionWallet();
-      connectedAddress = account.address;
-      const next = await ensureAccountBulletinReady(
-        account.address,
-        setProgress,
-      );
-      setKnownBulletinAllowance(account.address, next);
-      setProgress(
-        `Bulletin ready: ${formatNumber(next.remainingTransactions)} transaction(s), ${formatBytes(next.remainingBytes)} remaining.`,
-      );
+      // Bulletin initialization is driven by selectedAddress below. Keeping
+      // wallet connection and allowance discovery as consecutive states avoids
+      // racing a handler-local lookup against account selection/rendering.
+      await connectSessionWallet();
     } catch (e) {
-      if (
-        connectedAddress &&
-        recoverTimedOutBulletinTransport(connectedAddress, e)
-      ) {
-        return;
-      }
       setProgress(null);
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
-  }, [connectSessionWallet, setKnownBulletinAllowance]);
+  }, [connectSessionWallet]);
+
+  useEffect(() => {
+    if (!selectedAddress) return;
+    let active = true;
+
+    // This is the single Storage initialization path for a freshly connected,
+    // restored, or manually selected account. ensureAccountBulletinReady first
+    // performs the on-chain lookup and requests host allocation only when no
+    // usable allowance exists. Its module-level coordinator coalesces this with
+    // the session hook's read and with React Strict Mode's repeated effect.
+    setBusy(true);
+    setError(null);
+    setProgress("Looking up this account on Bulletin...");
+    void ensureAccountBulletinReady(selectedAddress, (message) => {
+      if (active) setProgress(message);
+    }).then(
+      (next) => {
+        if (!active) return;
+        setKnownBulletinAllowance(selectedAddress, next);
+        setProgress(
+          `Bulletin ready: ${formatNumber(next.remainingTransactions)} transaction(s), ${formatBytes(next.remainingBytes)} remaining.`,
+        );
+      },
+      (nextError: unknown) => {
+        if (!active) return;
+        if (recoverTimedOutBulletinTransport(selectedAddress, nextError)) {
+          return;
+        }
+        // Resolve the allowance to "known: not authorized" instead of leaving
+        // it undefined forever. Otherwise the status rail stays stuck on
+        // "Checking authorization..." after a real failure (rejected/timed
+        // out allocation) and never surfaces the manual retry action.
+        setKnownBulletinAllowance(selectedAddress, null);
+        setProgress(null);
+        setError(
+          nextError instanceof Error ? nextError.message : String(nextError),
+        );
+      },
+    ).finally(() => {
+      if (active) setBusy(false);
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [selectedAddress, setKnownBulletinAllowance]);
 
   const createStorageAccount = useCallback(async () => {
     if (!selectedAddress || busy || !canRequestAllowance) return;
@@ -160,6 +193,9 @@ function StorageHome() {
         `Bulletin ready: ${formatNumber(next.remainingTransactions)} transaction(s), ${formatBytes(next.remainingBytes)} remaining.`,
       );
     } catch (e) {
+      // A repeated manual retry over the same stuck host channel reliably
+      // times out again; only a fresh document gets a new MessagePort.
+      if (recoverTimedOutBulletinTransport(selectedAddress, e)) return;
       setProgress(null);
       if (e instanceof BulletinError) {
         setError(`${e.message} - ${e.recoveryHint}`);

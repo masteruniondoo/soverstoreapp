@@ -3,10 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchAllowance, type Allowance } from "./allowance";
 
-export function useBulletinAllowance(
-  address: string | null,
-  autoCheck = true,
-) {
+export function useBulletinAllowance(address: string | null) {
   const [allowance, setAllowance] = useState<Allowance | null | undefined>();
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -86,15 +83,14 @@ export function useBulletinAllowance(
       return;
     }
 
+    // Callers own when a lookup actually runs (a connect-time effect, a
+    // pre-upload refresh, a manual retry). This effect only ever resets the
+    // displayed value to whatever is already known for the newly selected
+    // address, so it never races an in-flight ensureAccountBulletinReady call
+    // with a second, independent read-only lookup for the same address.
     const known = knownRef.current;
-    if (known?.address === address) {
-      setAllowance(known.allowance);
-      if (autoCheck) void refresh(false).catch(() => undefined);
-    } else {
-      setAllowance(undefined);
-      if (autoCheck) void refresh(true).catch(() => undefined);
-    }
-  }, [address, autoCheck, refresh]);
+    setAllowance(known?.address === address ? known.allowance : undefined);
+  }, [address]);
 
   return { allowance, checking, error, refresh, setKnownAllowance };
 }
