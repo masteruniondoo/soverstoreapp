@@ -1172,6 +1172,45 @@ code {
   color: #781f32;
 }
 
+.qr-scanner {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.qr-scanner-frame {
+  position: relative;
+  width: 100%;
+  max-width: 360px;
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+  border-radius: 12px;
+  border: 2px solid var(--ink);
+  background: #000;
+}
+
+.qr-scanner-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.qr-scanner-reticle {
+  position: absolute;
+  inset: 14%;
+  border: 2px solid var(--pink);
+  border-radius: 12px;
+  pointer-events: none;
+}
+
+.qr-scanner-hint {
+  margin: 0;
+  color: var(--ink-60);
+  font-size: 13px;
+}
+
 .dot {
   width: 10px;
   height: 10px;

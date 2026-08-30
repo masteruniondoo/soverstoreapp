@@ -53,6 +53,40 @@ export async function downloadRecoveryQrCard(
   URL.revokeObjectURL(url);
 }
 
+/**
+ * Validates raw QR payload text against the two shapes a SoverStore recovery
+ * QR can carry (a trusted recovery link, or legacy raw recovery JSON) and
+ * returns the recovery text. Shared by the static-image and live-camera
+ * decode paths.
+ */
+function extractRecoveryFromQrText(data: string): string {
+  if (data.startsWith("https://") || data.startsWith("http://")) {
+    const recoveryUrl = new URL(data);
+    const isRecoveryRoute = [
+      "/",
+      "/preview",
+      "/preview/",
+      "/recovery",
+      "/recovery/",
+    ].includes(recoveryUrl.pathname);
+    if (!trustedRecoveryOrigins().has(recoveryUrl.origin) || !isRecoveryRoute) {
+      throw new Error("The QR code does not contain a SoverStore recovery link.");
+    }
+    const recoveryText = new URLSearchParams(
+      recoveryUrl.hash.slice(1),
+    ).get("recovery");
+    if (!recoveryText) {
+      throw new Error("The recovery link does not contain recovery data.");
+    }
+    parseRecovery(recoveryText);
+    return recoveryText;
+  }
+
+  // Legacy QR images contain raw recovery JSON.
+  parseRecovery(data);
+  return data;
+}
+
 export async function decodeRecoveryQrImage(file: File): Promise<string> {
   if (!file.type.startsWith("image/")) {
     throw new Error("Choose a PNG, JPEG, or other image containing a QR code.");
@@ -73,33 +107,26 @@ export async function decodeRecoveryQrImage(file: File): Promise<string> {
     if (!decoded?.data) {
       throw new Error("No readable QR code was found in this image.");
     }
-
-    if (decoded.data.startsWith("https://") || decoded.data.startsWith("http://")) {
-      const recoveryUrl = new URL(decoded.data);
-      const isRecoveryRoute = [
-        "/",
-        "/preview",
-        "/preview/",
-        "/recovery",
-        "/recovery/",
-      ].includes(recoveryUrl.pathname);
-      if (!trustedRecoveryOrigins().has(recoveryUrl.origin) || !isRecoveryRoute) {
-        throw new Error("The QR code does not contain a SoverStore recovery link.");
-      }
-      const recoveryText = new URLSearchParams(
-        recoveryUrl.hash.slice(1),
-      ).get("recovery");
-      if (!recoveryText) {
-        throw new Error("The recovery link does not contain recovery data.");
-      }
-      parseRecovery(recoveryText);
-      return recoveryText;
-    }
-
-    // Legacy QR images contain raw recovery JSON.
-    parseRecovery(decoded.data);
-    return decoded.data;
+    return extractRecoveryFromQrText(decoded.data);
   } finally {
     bitmap.close();
+  }
+}
+
+/**
+ * Tries to decode one live-camera frame. Returns `null` (never throws) when
+ * the frame has no QR code, or has one that isn't a valid SoverStore
+ * recovery code -- a live scanner should keep scanning past unrelated QR
+ * codes it happens to see, not stop on them.
+ */
+export function tryDecodeRecoveryQrFrame(image: ImageData): string | null {
+  const decoded = jsQR(image.data, image.width, image.height, {
+    inversionAttempts: "dontInvert",
+  });
+  if (!decoded?.data) return null;
+  try {
+    return extractRecoveryFromQrText(decoded.data);
+  } catch {
+    return null;
   }
 }

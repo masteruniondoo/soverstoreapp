@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Nav } from "@/components/Nav";
+import { RecoveryQrScanner } from "@/components/RecoveryQrScanner";
 import { parseRecovery } from "@/lib/artifacts/recovery";
 import {
   decodeRecoveryQrImage,
@@ -23,6 +24,7 @@ import {
 export default function RecoveryPage() {
   const [recoveryFile, setRecoveryFile] = useState<File | null>(null);
   const [qrFile, setQrFile] = useState<File | null>(null);
+  const [scanning, setScanning] = useState(false);
   const [recoveryText, setRecoveryText] = useState("");
   const [busy, setBusy] = useState(false);
   const [linkedRecoveryBusy, setLinkedRecoveryBusy] = useState(false);
@@ -99,6 +101,16 @@ export default function RecoveryPage() {
       setProgress(null);
       setError(e instanceof Error ? e.message : String(e));
     }
+  }, [cancelRecovery]);
+
+  const handleScannedQr = useCallback((text: string) => {
+    setScanning(false);
+    setQrFile(null);
+    setRecoveryFile(null);
+    cancelRecovery();
+    setError(null);
+    setRecoveryText(text);
+    setProgress("QR recovery data loaded and validated.");
   }, [cancelRecovery]);
 
   const recoverFromText = useCallback(
@@ -263,6 +275,25 @@ export default function RecoveryPage() {
             <small>The QR must contain valid SoverStore recovery data.</small>
           </label>
         </div>
+
+        <div className="input-divider">
+          <span>or</span>
+        </div>
+        <h2 className="input-heading">Scan with camera</h2>
+        {scanning ? (
+          <RecoveryQrScanner
+            onDecoded={handleScannedQr}
+            onClose={() => setScanning(false)}
+          />
+        ) : (
+          <button
+            className="btn btn-ink"
+            type="button"
+            onClick={() => setScanning(true)}
+          >
+            Scan QR code
+          </button>
+        )}
 
         <div className="input-divider">
           <span>or</span>
