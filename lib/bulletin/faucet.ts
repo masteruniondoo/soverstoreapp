@@ -5,19 +5,19 @@ import {
   WaitFor,
 } from "@parity/bulletin-sdk";
 import { DevProvider } from "@parity/product-sdk/wallet";
+import { BULLETIN_NETWORK_ID } from "@/lib/runtime-config";
 import { getBulletin } from "./client";
-import type { StoreAuthorization } from "./store";
 
-/** Matches the grant this app requested before the host-managed resource path existed. */
 const GRANT_TRANSACTIONS = 100;
 const GRANT_BYTES = 10n * 1024n * 1024n;
+const FAUCET_NETWORK_ID = "devnet-bulletin";
 
 let eveSignerPromise: ReturnType<typeof resolveEveSigner> | null = null;
 
 async function resolveEveSigner() {
-  const connected = await new DevProvider().connect();
+  const connected = await new DevProvider({ names: ["Eve"] }).connect();
   if (!connected.ok) throw connected.error;
-  const eve = connected.value.find((account) => account.name === "Eve");
+  const eve = connected.value[0];
   if (!eve) throw new Error("Devnet faucet account Eve is unavailable.");
   return eve.getSigner();
 }
@@ -33,52 +33,45 @@ function getEveSigner() {
 }
 
 /**
- * Directly authorizes `address` on Bulletin using the well-known Devnet
- * authorizer account //Eve, the same mechanism this app used before the
- * host-managed resource-allocation path (see git history at 1324fa0). Eve's
- * private key is derived from the public Substrate dev mnemonic, so this is
- * Devnet-only -- it must never run against a production Bulletin chain.
- *
- * Unlike requestResourceAllocation, this has no Desktop/mobile round-trip to
- * get lost: it's a local deterministic signer submitted over the same
- * host-routed chain connection reads already use, and it resolves only once
- * the authorization transaction is finalized.
+ * Mirrors Bulletin Console's testnet faucet exactly: the public //Eve dev
+ * signer grants 100 transactions / 10 MiB and the call resolves only after
+ * `authorize_account` is finalized. The connected user's wallet never signs
+ * or approves this authorization transaction.
  */
 export async function requestFaucetAllowance(
   address: string,
   onProgress: (message: string) => void,
-  minimum?: StoreAuthorization,
 ): Promise<void> {
-  onProgress("Requesting Bulletin storage allowance from the Devnet faucet...");
+  if (BULLETIN_NETWORK_ID !== FAUCET_NETWORK_ID) {
+    throw new Error(
+      `The public Bulletin faucet is restricted to ${FAUCET_NETWORK_ID}; refusing to use //Eve on ${BULLETIN_NETWORK_ID}.`,
+    );
+  }
+
+  onProgress("Preparing automatic Bulletin authorization...");
   const [signer, { api, client }] = await Promise.all([
     getEveSigner(),
     getBulletin(),
   ]);
   const sdk = new AsyncBulletinClient(api, signer, client.submit);
 
-  const transactions = Math.max(
-    GRANT_TRANSACTIONS,
-    minimum ? Number(minimum.transactions) : 0,
-  );
-  const bytes = minimum && minimum.bytes > GRANT_BYTES ? minimum.bytes : GRANT_BYTES;
-
   await sdk
-    .authorizeAccount(address, transactions, bytes)
+    .authorizeAccount(address, GRANT_TRANSACTIONS, GRANT_BYTES)
     .withCallback((event: ProgressEvent) => {
       switch (event.type) {
         case TxStatus.Signed:
-          onProgress("Faucet authorization signed...");
+          onProgress("Authorization transaction signed...");
           break;
         case TxStatus.Broadcasted:
-          onProgress("Broadcasting faucet authorization...");
+          onProgress("Broadcasting authorization to Bulletin...");
           break;
         case TxStatus.InBlock:
           onProgress(
-            `Faucet authorization included in block #${(event as { blockNumber?: number }).blockNumber ?? "..."}...`,
+            `Authorization included in block #${(event as { blockNumber?: number }).blockNumber ?? "..."}; waiting for finalization...`,
           );
           break;
         case TxStatus.Finalized:
-          onProgress("Faucet authorization finalized.");
+          onProgress("Authorization finalized on Bulletin.");
           break;
       }
     })

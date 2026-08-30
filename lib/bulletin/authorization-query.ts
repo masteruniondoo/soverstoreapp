@@ -94,7 +94,7 @@ type AuthorizationRecord = {
     bytes?: string | number | bigint;
     bytes_allowance?: string | number | bigint;
   };
-  expiration: string | number | bigint;
+  expiration?: string | number | bigint | null;
 };
 
 export type AuthorizationStorageResult = {

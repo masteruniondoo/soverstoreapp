@@ -35,7 +35,7 @@ const hostManager = new SignerManager({
       : new DevProvider(),
 });
 const HOST_PERMISSION_TIMEOUT_MS = 15_000;
-// The host can keep a first-time mobile allocation prompt open for 60 seconds.
+// The host can keep a first-time smart-contract allocation prompt open for 60 seconds.
 // Leave enough time for the decision to travel back over the Desktop bridge;
 // a 30-second deadline could reject an approval that was still being handled.
 const HOST_RESOURCE_TIMEOUT_MS = 90_000;
@@ -190,12 +190,10 @@ export function ensureTransactionSigningPermission(): Promise<void> {
 }
 
 async function ensureResourceAllowance(
-  resource:
-    | { tag: "BulletinAllowance"; value: undefined }
-    | {
-        tag: "SmartContractAllowance";
-        value: number;
-      },
+  resource: {
+    tag: "SmartContractAllowance";
+    value: number;
+  },
   label: string,
 ): Promise<void> {
   const allocation = await withTimeout(
@@ -223,13 +221,6 @@ export function ensureSmartContractAllowance(address: string): Promise<void> {
       },
       "Smart-contract transaction",
     ));
-}
-
-export function ensureBulletinAllowance(): Promise<void> {
-  return ensureResourceAllowance(
-    { tag: "BulletinAllowance", value: undefined },
-    "Bulletin storage",
-  );
 }
 
 export async function connectHostWallet(): Promise<AppWalletAccount[]> {

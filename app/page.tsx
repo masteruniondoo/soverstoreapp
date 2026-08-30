@@ -1,13 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BulletinError, MAX_FILE_SIZE } from "@parity/bulletin-sdk";
 import { useAppSession } from "@/components/AppSessionProvider";
 import { OpenDropLinkForm } from "@/components/drops/OpenDropLinkForm";
 import { Nav } from "@/components/Nav";
 import PreviewPage from "@/app/preview/page";
 import {
-  estimateStoreAuthorization,
   ensureAccountBulletinReady,
   storeBlob,
   type BlobStoreResult,
@@ -30,7 +29,6 @@ import { randomBytes } from "@/lib/crypto/random";
 import { formatBytes, formatNumber, shortAddress } from "@/lib/format";
 import { BULLETIN_NETWORK_NAME } from "@/lib/runtime-config";
 import {
-  isBulletinTransportTimeout,
   recoverTimedOutBulletinTransport,
 } from "@/lib/bulletin/recovery";
 
@@ -74,6 +72,8 @@ function StorageHome() {
   const [result, setResult] = useState<StorageResult | null>(null);
   const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const walletConnectInProgressRef = useRef(false);
+  const authorizationRunRef = useRef(0);
 
   const walletConnected = selectedAddress != null;
   const authorizationResolved = allowance !== undefined;
@@ -84,29 +84,12 @@ function StorageHome() {
   );
   const fileTooLarge =
     estimatedBlobSize != null && estimatedBlobSize > MAX_FILE_SIZE;
-  const estimatedAuthorization =
-    estimatedBlobSize == null
-      ? null
-      : estimateStoreAuthorization(estimatedBlobSize);
-  const allowanceTooSmall =
-    estimatedBlobSize != null &&
-    estimatedAuthorization != null &&
-    allowance != null &&
-    allowance.usable &&
-    (allowance.remainingBytes < estimatedAuthorization.bytes ||
-      allowance.remainingTransactions < estimatedAuthorization.transactions);
-  const canRequestAllowance =
-    walletConnected &&
-    authorizationResolved &&
-    !checkingAllowance &&
-    (!authorized || allowanceTooSmall);
   const canUpload =
     selectedFile != null &&
     selectedAccount != null &&
     authorized &&
     !busy &&
-    !fileTooLarge &&
-    !allowanceTooSmall;
+    !fileTooLarge;
 
   useEffect(() => {
     if (!busy && !authorized && storageState === "idle") {
@@ -114,98 +97,67 @@ function StorageHome() {
     }
   }, [authorized, busy, storageState]);
 
+  const prepareBulletin = useCallback(async (address: string) => {
+    const runId = authorizationRunRef.current + 1;
+    authorizationRunRef.current = runId;
+    setBusy(true);
+    setError(null);
+    setProgress("Wallet connected. Checking Bulletin authorization...");
+    try {
+      const next = await ensureAccountBulletinReady(address, (message) => {
+        if (authorizationRunRef.current === runId) setProgress(message);
+      });
+      if (authorizationRunRef.current !== runId) return;
+      setKnownBulletinAllowance(address, next);
+      setProgress(
+        next.expiresAtBlock === undefined
+          ? "Bulletin authorization is active."
+          : `Bulletin authorization is active until block #${formatNumber(next.expiresAtBlock)}.`,
+      );
+    } catch (nextError) {
+      if (authorizationRunRef.current !== runId) return;
+      if (recoverTimedOutBulletinTransport(address, nextError)) return;
+      setKnownBulletinAllowance(address, null);
+      setProgress(null);
+      if (nextError instanceof BulletinError) {
+        setError(`${nextError.message} - ${nextError.recoveryHint}`);
+      } else {
+        setError(
+          nextError instanceof Error ? nextError.message : String(nextError),
+        );
+      }
+    } finally {
+      if (authorizationRunRef.current === runId) setBusy(false);
+    }
+  }, [setKnownBulletinAllowance]);
+
   const connectWallet = useCallback(async () => {
+    walletConnectInProgressRef.current = true;
     setError(null);
     setBusy(true);
     setProgress("Connecting wallet...");
     try {
-      // Bulletin initialization is driven by selectedAddress below. Keeping
-      // wallet connection and allowance discovery as consecutive states avoids
-      // racing a handler-local lookup against account selection/rendering.
-      await connectSessionWallet();
-    } catch (e) {
+      // connectSessionWallet resolves only after the Desktop/mobile connection
+      // has settled. Bulletin work must not begin before this await completes.
+      const connected = await connectSessionWallet();
+      await prepareBulletin(connected.address);
+    } catch (nextError) {
       setProgress(null);
-      setError(e instanceof Error ? e.message : String(e));
+      setError(
+        nextError instanceof Error ? nextError.message : String(nextError),
+      );
     } finally {
+      walletConnectInProgressRef.current = false;
       setBusy(false);
     }
-  }, [connectSessionWallet]);
+  }, [connectSessionWallet, prepareBulletin]);
 
   useEffect(() => {
-    if (!selectedAddress) return;
-    let active = true;
-
-    // This is the single Storage initialization path for a freshly connected,
-    // restored, or manually selected account. ensureAccountBulletinReady first
-    // performs the on-chain lookup and requests host allocation only when no
-    // usable allowance exists. Its module-level coordinator coalesces this with
-    // the session hook's read and with React Strict Mode's repeated effect.
-    setBusy(true);
-    setError(null);
-    setProgress("Looking up this account on Bulletin...");
-    void ensureAccountBulletinReady(selectedAddress, (message) => {
-      if (active) setProgress(message);
-    }).then(
-      (next) => {
-        if (!active) return;
-        setKnownBulletinAllowance(selectedAddress, next);
-        setProgress(
-          `Bulletin ready: ${formatNumber(next.remainingTransactions)} transaction(s), ${formatBytes(next.remainingBytes)} remaining.`,
-        );
-      },
-      (nextError: unknown) => {
-        if (!active) return;
-        if (recoverTimedOutBulletinTransport(selectedAddress, nextError)) {
-          return;
-        }
-        // Resolve the allowance to "known: not authorized" instead of leaving
-        // it undefined forever. Otherwise the status rail stays stuck on
-        // "Checking authorization..." after a real failure (rejected/timed
-        // out allocation) and never surfaces the manual retry action.
-        setKnownBulletinAllowance(selectedAddress, null);
-        setProgress(null);
-        setError(
-          nextError instanceof Error ? nextError.message : String(nextError),
-        );
-      },
-    ).finally(() => {
-      if (active) setBusy(false);
-    });
-
-    return () => {
-      active = false;
-    };
-  }, [selectedAddress, setKnownBulletinAllowance]);
-
-  const createStorageAccount = useCallback(async () => {
-    if (!selectedAddress || busy || !canRequestAllowance) return;
-    setBusy(true);
-    setError(null);
-    setProgress("Requesting host-managed Bulletin allowance...");
-    try {
-      const next = await ensureAccountBulletinReady(
-        selectedAddress,
-        setProgress,
-        estimatedAuthorization ?? undefined,
-      );
-      setKnownBulletinAllowance(selectedAddress, next);
-      setProgress(
-        `Bulletin ready: ${formatNumber(next.remainingTransactions)} transaction(s), ${formatBytes(next.remainingBytes)} remaining.`,
-      );
-    } catch (e) {
-      // A repeated manual retry over the same stuck host channel reliably
-      // times out again; only a fresh document gets a new MessagePort.
-      if (recoverTimedOutBulletinTransport(selectedAddress, e)) return;
-      setProgress(null);
-      if (e instanceof BulletinError) {
-        setError(`${e.message} - ${e.recoveryHint}`);
-      } else {
-        setError(e instanceof Error ? e.message : String(e));
-      }
-    } finally {
-      setBusy(false);
-    }
-  }, [selectedAddress, busy, canRequestAllowance, estimatedAuthorization, setKnownBulletinAllowance]);
+    if (!selectedAddress || walletConnectInProgressRef.current) return;
+    // Covers a restored connection and explicit account switches. A fresh
+    // Connect is handled above so its lookup cannot race the settle period.
+    void prepareBulletin(selectedAddress);
+  }, [prepareBulletin, selectedAddress]);
 
   const selectFile = useCallback((file: File | null) => {
     setSelectedFile(file);
@@ -232,25 +184,13 @@ function StorageHome() {
     setBusy(true);
     setError(null);
     setResult(null);
-    setProgress("Refreshing Bulletin allowance...");
+    setProgress("Checking Bulletin authorization before upload...");
     try {
-      const currentAllowance = await refreshAllowance(true, true, true);
-      const estimatedRequired = estimateStoreAuthorization(
-        estimateBlobSize(selectedFile),
+      const currentAllowance = await ensureAccountBulletinReady(
+        selectedAddress,
+        setProgress,
       );
-      if (!currentAllowance?.usable) {
-        throw new Error(
-          "Bulletin allowance is missing, expired, or exhausted. Request a new allowance before uploading.",
-        );
-      }
-      if (
-        currentAllowance.remainingBytes < estimatedRequired.bytes ||
-        currentAllowance.remainingTransactions < estimatedRequired.transactions
-      ) {
-        throw new Error(
-          "The current Bulletin allowance is too small for this upload. Request a new allowance.",
-        );
-      }
+      setKnownBulletinAllowance(selectedAddress, currentAllowance);
 
       setProgress(`Reading ${selectedFile.name}...`);
       const fileBytes = new Uint8Array(await selectedFile.arrayBuffer());
@@ -276,16 +216,6 @@ function StorageHome() {
           `Encrypted blob is ${formatBytes(BigInt(blob.length))}, above the ${formatBytes(BigInt(MAX_FILE_SIZE))} transaction limit.`,
         );
       }
-      const exactRequired = estimateStoreAuthorization(blob.length);
-      if (
-        currentAllowance.remainingBytes < exactRequired.bytes ||
-        currentAllowance.remainingTransactions < exactRequired.transactions
-      ) {
-        throw new Error(
-          `Remaining allowance is ${formatBytes(currentAllowance.remainingBytes)} and ${formatNumber(currentAllowance.remainingTransactions)} transaction(s), but this Bulletin upload needs ${formatBytes(exactRequired.bytes)} and ${formatNumber(exactRequired.transactions)} transaction(s). Request a new Bulletin allowance.`,
-        );
-      }
-
       setStorageState("storing");
       const store = await storeBlob(
         blob,
@@ -309,8 +239,9 @@ function StorageHome() {
       });
       setStorageState("done");
       setProgress("Uploaded. Download recovery now.");
-      void refreshAllowance(false).catch(() => undefined);
+      void refreshAllowance(false, true).catch(() => undefined);
     } catch (e) {
+      if (recoverTimedOutBulletinTransport(selectedAddress, e)) return;
       setStorageState("failed");
       setProgress(null);
       if (e instanceof BulletinError) {
@@ -327,6 +258,7 @@ function StorageHome() {
     selectedAddress,
     selectedFile,
     refreshAllowance,
+    setKnownBulletinAllowance,
   ]);
 
   return (
@@ -376,19 +308,16 @@ function StorageHome() {
           <span className="rail-key">Bulletin</span>
           <span className="rail-val">
             {!walletConnected && "Waiting for a wallet"}
-            {walletConnected &&
-              (checkingAllowance || !authorizationResolved) &&
-              "Checking authorization..."}
-            {walletConnected &&
-              !checkingAllowance &&
-              authorizationResolved &&
-              (authorized
-                ? "Authorized"
+            {walletConnected && authorized && "Authorized"}
+            {walletConnected && !authorized && progress && progress}
+            {walletConnected && !authorized && !progress && error &&
+              "Authorization failed"}
+            {walletConnected && !authorized && !progress && !error &&
+              (checkingAllowance || !authorizationResolved
+                ? "Checking authorization..."
                 : allowance?.expired
-                  ? "Not authorized - allowance expired"
-                  : allowance?.exhausted
-                    ? "Not authorized - allowance exhausted"
-                  : "Not authorized")}
+                  ? "Authorization expired"
+                  : "No active authorization")}
           </span>
         </div>
       </section>
@@ -419,7 +348,7 @@ function StorageHome() {
             >
               {allowance ? formatNumber(allowance.remainingTransactions) : "-"}
             </span>
-            <span className="meter-label">transactions left</span>
+            <span className="meter-label">soft-priority transactions</span>
           </div>
           <div className="meter">
             <span
@@ -427,19 +356,21 @@ function StorageHome() {
             >
               {allowance ? formatBytes(allowance.remainingBytes) : "-"}
             </span>
-            <span className="meter-label">storage left</span>
+            <span className="meter-label">soft-priority bytes</span>
           </div>
         </div>
         <div className="voucher-foot">
-          {!authorizationResolved || checkingAllowance
-            ? "looking up this account on Bulletin"
-            : allowance?.expiresAtBlock != null
-            ? allowance.expired
-              ? `expired at block #${formatNumber(allowance.expiresAtBlock)} - request a new allowance`
-              : allowance.exhausted
-                ? "allowance quota exhausted - request a new allowance"
-                : `valid until block #${formatNumber(allowance.expiresAtBlock)}${allowance.remainingBlocks == null ? "" : ` (${formatNumber(allowance.remainingBlocks)} blocks left)`}`
-            : "no active authorization on this account"}
+          {!authorized && progress
+            ? progress
+            : !authorizationResolved || checkingAllowance
+              ? "looking up this account on Bulletin"
+            : authorized
+              ? allowance?.expiresAtBlock != null
+                ? `valid until block #${formatNumber(allowance.expiresAtBlock)}${allowance.remainingBlocks == null ? "" : ` (${formatNumber(allowance.remainingBlocks)} blocks left)`}; counters above affect priority only`
+                : "authorization active; counters above affect priority only"
+              : allowance?.expired && allowance.expiresAtBlock != null
+                ? `authorization expired at block #${formatNumber(allowance.expiresAtBlock)}`
+                : "no active authorization on this account"}
         </div>
       </section>
 
@@ -474,34 +405,6 @@ function StorageHome() {
                 ))}
               </select>
             )}
-            <div className="actions-row">
-              <button
-                className="btn btn-pink"
-                onClick={createStorageAccount}
-                disabled={busy || !canRequestAllowance}
-              >
-                {!authorizationResolved || checkingAllowance
-                  ? "Checking Bulletin..."
-                  : busy && storageState === "idle"
-                  ? "Working..."
-                  : "Request Bulletin allowance"}
-              </button>
-              <span className="btn-sub">
-                Host-managed Devnet quota. Available when missing, expired,
-                exhausted, or too small for the selected file.
-              </span>
-              {allowanceError && (
-                <button
-                  className="btn btn-ink"
-                  type="button"
-                  disabled={checkingAllowance}
-                  onClick={() => void refreshAllowance(true).catch(() => undefined)}
-                >
-                  Retry Bulletin check
-                </button>
-              )}
-            </div>
-
             <div
               className="file-drop"
               onDragOver={(event) => event.preventDefault()}
@@ -537,18 +440,6 @@ function StorageHome() {
                 {formatBytes(BigInt(MAX_FILE_SIZE))}.
               </p>
             )}
-            {allowanceTooSmall && estimatedBlobSize != null && allowance && (
-              <p className="error">
-                Remaining allowance is {formatBytes(allowance.remainingBytes)}.
-                This Bulletin upload needs about{" "}
-                {estimatedAuthorization
-                  ? formatBytes(estimatedAuthorization.bytes)
-                  : "-"} and{" "}
-                {estimatedAuthorization?.transactions.toString() ?? "-"} transaction(s).
-                Request a new Bulletin allowance.
-              </p>
-            )}
-
             <div className="actions-row">
               <button
                 className="btn btn-pink"
@@ -589,22 +480,8 @@ function StorageHome() {
             )}
           </div>
         )}
-        {error && (
-          <p className="error">
-            {error}
-            {isBulletinTransportTimeout(error) && (
-              <>
-                {" "}
-                <button
-                  className="btn btn-ink"
-                  type="button"
-                  onClick={() => window.location.reload()}
-                >
-                  Reload page
-                </button>
-              </>
-            )}
-          </p>
+        {(error || allowanceError) && (
+          <p className="error">{error ?? allowanceError}</p>
         )}
       </section>
 

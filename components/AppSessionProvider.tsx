@@ -9,7 +9,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { fetchAllowance, type Allowance } from "@/lib/bulletin/allowance";
+import type { Allowance } from "@/lib/bulletin/allowance";
 import {
   clearBulletinTransportRecovery,
   getBulletinTransportRecovery,
@@ -38,7 +38,6 @@ type AppSession = {
   refreshBulletinAllowance: (
     showSpinner?: boolean,
     force?: boolean,
-    includeLiveness?: boolean,
   ) => Promise<Allowance | null>;
   setKnownBulletinAllowance: (
     address: string,
@@ -70,18 +69,14 @@ export function AppSessionProvider({ children }: { children: ReactNode }) {
     const recovery = getBulletinTransportRecovery();
     if (recovery) {
       void connectHostWallet().then(
-        async (accounts) => {
+        (accounts) => {
           if (accounts.some((account) => account.address === recovery.address)) {
             selectHostWalletAccount(recovery.address);
           }
           sync();
-          try {
-            const allowance = await fetchAllowance(recovery.address);
-            setKnownBulletinAllowance(recovery.address, allowance);
-          } catch {
-            // Keep the marker until it expires so a second failed lookup cannot
-            // create an automatic reload loop. The owner UI exposes the error.
-          }
+          // Storage, or the verified Drops publisher branch, owns the complete
+          // check/authorize flow. Do not start a second read here that could
+          // overwrite its fresh liveness result.
         },
         () => {
           clearBulletinTransportRecovery();
@@ -91,7 +86,7 @@ export function AppSessionProvider({ children }: { children: ReactNode }) {
     }
 
     return unsubscribe;
-  }, [setKnownBulletinAllowance]);
+  }, []);
 
   const connectWallet = useCallback(async () => {
     const accounts = await connectHostWallet();

@@ -28,7 +28,6 @@ export function useBulletinAllowance(address: string | null) {
   const refresh = useCallback(async (
     showSpinner = true,
     force = false,
-    includeLiveness = false,
   ) => {
     const target = addressRef.current;
     if (!target) {
@@ -41,7 +40,7 @@ export function useBulletinAllowance(address: string | null) {
     revisionRef.current = revision;
     if (showSpinner) setChecking(true);
     try {
-      const next = await fetchAllowance(target, includeLiveness, force);
+      const next = await fetchAllowance(target, force);
       if (
         addressRef.current === target &&
         revisionRef.current === revision

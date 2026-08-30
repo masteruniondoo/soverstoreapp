@@ -45,18 +45,13 @@ export function clearBulletinTransportRecovery(): void {
  * True when an error is a host-transport timeout that only a fresh document
  * (not another in-session retry) can recover from: Desktop can swap the
  * underlying MessagePort at any point after wallet connection, and the page
- * has no way to notice that swap without reloading. Covers both the direct
- * chain-query timeout (authorization-query.ts) and the host resource
- * allocation timeout (wallet.ts's ensureBulletinAllowance) -- retrying either
- * one in the same document just resends a request over the same stuck
- * channel and reliably times out again.
+ * has no way to notice that swap without reloading. Bulletin authorization
+ * itself uses the direct Devnet faucet transaction; only the host-routed
+ * chain query can require this recovery.
  */
 export function isBulletinTransportTimeout(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return (
-    message.includes("Bulletin authorization query timed out") ||
-    message.includes("Bulletin storage allocation timed out")
-  );
+  return message.includes("Bulletin authorization query timed out");
 }
 
 /**
@@ -64,10 +59,8 @@ export function isBulletinTransportTimeout(error: unknown): boolean {
  * only a fresh document receives a new host MessagePort. Reload at most once
  * automatically, retain the address in session storage, and let
  * AppSessionProvider reconnect it automatically after the new document
- * starts. Callers should still offer a manual "Reload page" action (see
- * isBulletinTransportTimeout) for when this single automatic attempt was not
- * enough -- the reload timing races the host handshake and can need a second
- * try.
+ * starts. The automatic attempt is bounded so a bad transport cannot create a
+ * reload loop; any remaining failure is shown as informational status.
  */
 export function recoverTimedOutBulletinTransport(
   address: string,
