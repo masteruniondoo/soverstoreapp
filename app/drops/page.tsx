@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ss58ToH160 } from "@parity/product-sdk/address";
+import { AddressRow } from "@/components/AddressRow";
 import { useAppSession } from "@/components/AppSessionProvider";
 import { BulletinBalanceNotice } from "@/components/BulletinBalanceNotice";
 import { OpenDropLinkForm } from "@/components/drops/OpenDropLinkForm";
@@ -9,6 +10,7 @@ import { DropShareActions } from "@/components/drops/DropShareActions";
 import { useFocusedDropId } from "@/components/drops/DropRouteContext";
 import { recoverTimedOutBulletinTransport } from "@/lib/bulletin/recovery";
 import { Nav } from "@/components/Nav";
+import { useAndroidFileNotice } from "@/components/useAndroidFileNotice";
 import {
   buildHeader,
   decodeBlob,
@@ -232,6 +234,7 @@ export default function DropsPage() {
   } | null>(null);
   const [bulletinState, setBulletinState] = useState<OwnerActionState>({ status: "idle" });
   const [bulletinResultAddress, setBulletinResultAddress] = useState<string | null>(null);
+  const { showAndroidNotice, notifyFilePickerAttempt } = useAndroidFileNotice();
   const [fileByDrop, setFileByDrop] = useState<Record<string, File | undefined>>({});
   const [publishByDrop, setPublishByDrop] = useState<Record<string, OwnerActionState>>({});
   const [retryByDrop, setRetryByDrop] = useState<Record<string, PublishRetry | undefined>>({});
@@ -954,17 +957,22 @@ export default function DropsPage() {
           </button>
         </div>
         {connectedSs58 && (
-          <p className="drops-identity">
-            Signing account <code>{connectedSs58}</code><br />
-            Contract address <code>{connectedEvm}</code><br />
-            {currentAccountRole.status === "checking"
-              ? "Buyer actions ready. Checking publisher role..."
-              : currentAccountRole.status === "owner"
-                ? "Publisher account confirmed."
-                : currentAccountRole.status === "error"
-                  ? `Buyer actions ready. Publisher check failed: ${currentAccountRole.message}`
-                  : "Buyer actions ready."}
-          </p>
+          <div className="drops-identity">
+            <p>Signing account</p>
+            <AddressRow address={connectedSs58} />
+            <p>
+              Contract address <code>{connectedEvm}</code>
+            </p>
+            <p>
+              {currentAccountRole.status === "checking"
+                ? "Buyer actions ready. Checking publisher role..."
+                : currentAccountRole.status === "owner"
+                  ? "Publisher account confirmed."
+                  : currentAccountRole.status === "error"
+                    ? `Buyer actions ready. Publisher check failed: ${currentAccountRole.message}`
+                    : "Buyer actions ready."}
+            </p>
+          </div>
         )}
       </header>
 
@@ -999,9 +1007,7 @@ export default function DropsPage() {
               )}
             </div>
           </div>
-          <div className="rail">
-            <BulletinBalanceNotice address={account?.address ?? null} />
-          </div>
+          <BulletinBalanceNotice address={account?.address ?? null} />
           <form className="drops-owner-form" onSubmit={createDrop}>
             <label>
               Public announced name
@@ -1172,11 +1178,15 @@ export default function DropsPage() {
                       <small>{formatBytes(BigInt(retry.blobSize))} encrypted / {retry.buyers.length} buyer(s). Do not reload this page until publication succeeds.</small>
                     </div>
                   ) : (
-                    <label className="drops-file-field">
+                    <label
+                      className="drops-file-field"
+                      onClick={notifyFilePickerAttempt}
+                    >
                       Choose the real file
                       <input
                         type="file"
                         accept="*/*"
+                        onClick={notifyFilePickerAttempt}
                         onChange={(event) => setFileByDrop((current) => ({
                           ...current,
                           [key]: event.target.files?.[0],
@@ -1186,6 +1196,14 @@ export default function DropsPage() {
                         <small>{selectedFile.name} / approximately {formatBytes(BigInt(estimateBlobSize(selectedFile)))} encrypted</small>
                       )}
                     </label>
+                  )}
+                  {showAndroidNotice && (
+                    <p className="drops-open-error" role="alert">
+                      File selection currently only works reliably on iPhone
+                      and Desktop. If no picker opened, this is a known
+                      Android limitation we&apos;re tracking, not a problem
+                      with your file.
+                    </p>
                   )}
                   {selectedFile && estimateBlobSize(selectedFile) > MAX_UPLOAD_SIZE && (
                     <p className="drops-open-error" role="alert">

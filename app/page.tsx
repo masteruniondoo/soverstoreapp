@@ -2,9 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BulletinError } from "@parity/bulletin-sdk";
+import { AddressRow } from "@/components/AddressRow";
 import { useAppSession } from "@/components/AppSessionProvider";
 import { BulletinBalanceNotice } from "@/components/BulletinBalanceNotice";
 import { Nav } from "@/components/Nav";
+import { useAndroidFileNotice } from "@/components/useAndroidFileNotice";
 import PreviewPage from "@/app/preview/page";
 import {
   addUploadHistoryEntry,
@@ -68,6 +70,7 @@ function StorageHome() {
     setKnownBulletinAllowance,
   } = useAppSession();
 
+  const { showAndroidNotice, notifyFilePickerAttempt } = useAndroidFileNotice();
   const [busy, setBusy] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [storageState, setStorageState] = useState<StorageState>("idle");
@@ -274,7 +277,7 @@ function StorageHome() {
   ]);
 
   return (
-    <main className="shell">
+    <main className="shell drops-page">
       <Nav />
       <header className="masthead masthead-network">
         <div className="net-chip">{BULLETIN_NETWORK_NAME}</div>
@@ -297,18 +300,15 @@ function StorageHome() {
                     {selectedAccount.name}
                   </span>
                 )}
-                <code
-                  className="wallet-address"
-                  title={selectedAddress ?? undefined}
-                >
-                  {selectedAddress}
-                </code>
               </>
             ) : (
               "Not connected"
             )}
           </span>
         </div>
+        {walletConnected && selectedAddress && (
+          <AddressRow address={selectedAddress} />
+        )}
         <div className="rail-row">
           <span
             className={`dot ${authorized ? "on" : ""} ${
@@ -330,8 +330,8 @@ function StorageHome() {
                   : "No active authorization")}
           </span>
         </div>
-        <BulletinBalanceNotice address={selectedAddress} />
       </section>
+      {walletConnected && <BulletinBalanceNotice address={selectedAddress} />}
 
       <section
         className="voucher"
@@ -426,6 +426,7 @@ function StorageHome() {
                 className="file-input"
                 type="file"
                 accept="*/*"
+                onClick={notifyFilePickerAttempt}
                 onChange={(event) =>
                   selectFile(event.target.files?.[0] ?? null)
                 }
@@ -434,6 +435,7 @@ function StorageHome() {
               <label
                 className={`file-drop-label ${!authorized || busy ? "disabled" : ""}`}
                 htmlFor="file-upload"
+                onClick={notifyFilePickerAttempt}
               >
                 <span>{selectedFile ? selectedFile.name : "Drop a file"}</span>
                 <small>
@@ -444,6 +446,13 @@ function StorageHome() {
               </label>
             </div>
 
+            {showAndroidNotice && (
+              <p className="error" role="alert">
+                File selection currently only works reliably on iPhone and
+                Desktop. If no picker opened, this is a known Android
+                limitation we&apos;re tracking, not a problem with your file.
+              </p>
+            )}
             {fileTooLarge && estimatedBlobSize != null && (
               <p className="error">
                 This encrypted blob is about{" "}

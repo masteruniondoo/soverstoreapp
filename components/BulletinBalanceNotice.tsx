@@ -18,27 +18,33 @@ export function BulletinBalanceNotice({ address }: { address: string | null }) {
   const low = balance !== null && balance < LOW_BALANCE_THRESHOLD;
 
   return (
-    <div className="rail-row">
-      <span className={`dot ${low ? "" : "on"}`} />
-      <span className="rail-key">Balance</span>
-      <span className="rail-val">
-        {balance === null
-          ? checking
-            ? "Checking Bulletin balance..."
-            : "Unknown"
-          : formatPas(balance)}
+    <div className={`balance-card${low ? " is-low" : ""}`}>
+      <div className="balance-card-row">
+        <span className="rail-key">Balance</span>
+        <span className="balance-amount">
+          {balance === null
+            ? checking
+              ? "Checking..."
+              : "Unknown"
+            : formatPas(balance)}
+        </span>
         {low && (
-          <>
-            {" "}
-            - low. Uploads and renewals need PAS on Products Devnet Bulletin
-            to pay their transaction fee.{" "}
-            <a href={FAUCET_URL} target="_blank" rel="noreferrer">
-              Get devnet PAS
-            </a>
-            .
-          </>
+          <a
+            className="btn btn-pink btn-sm"
+            href={FAUCET_URL}
+            target="_blank"
+            rel="noreferrer"
+          >
+            Get PAS
+          </a>
         )}
-      </span>
+      </div>
+      {low && (
+        <p className="balance-card-note">
+          Uploads and renewals need PAS on Products Devnet Bulletin to pay
+          their transaction fee.
+        </p>
+      )}
     </div>
   );
 }

@@ -2,6 +2,7 @@
 
 import { useCallback, useState } from "react";
 import { BulletinError } from "@parity/bulletin-sdk";
+import { AddressRow } from "@/components/AddressRow";
 import { useAppSession } from "@/components/AppSessionProvider";
 import { BulletinBalanceNotice } from "@/components/BulletinBalanceNotice";
 import { Nav } from "@/components/Nav";
@@ -165,6 +166,7 @@ export default function MyFilesPage() {
                 )}
               </span>
             </div>
+            {selectedAddress && <AddressRow address={selectedAddress} />}
             <div className="rail-row">
               <span className={`dot ${authorized ? "on" : ""}`} />
               <span className="rail-key">Bulletin</span>
@@ -176,8 +178,8 @@ export default function MyFilesPage() {
                     : "No active authorization"}
               </span>
             </div>
-            <BulletinBalanceNotice address={selectedAddress} />
           </section>
+          <BulletinBalanceNotice address={selectedAddress} />
 
           {records.length === 0 ? (
             <p className="drops-empty">

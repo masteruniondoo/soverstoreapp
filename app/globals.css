@@ -437,6 +437,18 @@ code {
   overflow-wrap: anywhere;
 }
 
+.drops-identity p {
+  margin: 0 0 8px;
+}
+
+.drops-identity p:last-child {
+  margin-bottom: 0;
+}
+
+.drops-identity .address-row {
+  margin-bottom: 8px;
+}
+
 .drops-owner-panel {
   margin-top: 34px;
   padding: 26px 28px;
@@ -1093,6 +1105,71 @@ code {
 .rail-val .wallet-address {
   overflow-wrap: anywhere;
   word-break: break-all;
+}
+
+.btn-sm {
+  padding: 6px 12px;
+  font-size: 12px;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.address-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.address-value {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  font-size: 13px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+
+.balance-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+}
+
+.balance-card.is-low {
+  border-color: var(--pink);
+  background: #fff1f4;
+}
+
+.balance-card-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.balance-amount {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.balance-card-note {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-60);
+}
+
+.balance-card.is-low .balance-card-note {
+  color: #781f32;
 }
 
 .dot {
