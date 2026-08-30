@@ -229,12 +229,20 @@ export default function MyFilesPage() {
                         </dd>
                       </div>
                     </dl>
-                    {record.blocksRemaining !== null && (
-                      <p className="drops-open-status">
-                        {record.blocksRemaining > 0
-                          ? `${formatNumber(record.blocksRemaining)} blocks remaining`
-                          : `Expired ${formatNumber(Math.abs(record.blocksRemaining))} blocks ago`}
-                      </p>
+                    {record.percentRemaining !== null && record.blocksRemaining !== null && (
+                      <div className="files-lease">
+                        <div className="files-lease-bar">
+                          <div
+                            className={`files-lease-fill ${statusClass(record.status)}`}
+                            style={{ width: `${record.percentRemaining}%` }}
+                          />
+                        </div>
+                        <p className="drops-open-status">
+                          {record.blocksRemaining > 0
+                            ? `${Math.round(record.percentRemaining)}% of storage time left (${formatNumber(record.blocksRemaining)} blocks)`
+                            : `Expired ${formatNumber(Math.abs(record.blocksRemaining))} blocks ago`}
+                        </p>
+                      </div>
                     )}
                     <div className="actions-row">
                       <button

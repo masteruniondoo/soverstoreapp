@@ -627,6 +627,36 @@ code {
   overflow-wrap: anywhere;
 }
 
+.files-lease {
+  margin-top: 16px;
+}
+
+.files-lease-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: #eceef2;
+  overflow: hidden;
+}
+
+.files-lease-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: #176338;
+  transition: width 0.2s ease;
+}
+
+.files-lease-fill.warning {
+  background: #8a6100;
+}
+
+.files-lease-fill.expired {
+  background: #781f32;
+}
+
+.files-lease .drops-open-status {
+  margin-top: 6px;
+}
+
 .drops-card > h2 {
   margin: 18px 0 20px;
   font-size: clamp(25px, 5vw, 36px);
