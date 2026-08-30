@@ -4,7 +4,7 @@ const deployConfig = {
   description:
     "Encrypt files locally, store ciphertext on Polkadot Bulletin, and recover them privately.",
   icon: { path: "./public/soverstore-icon.png", format: "png" },
-  executables: [{ kind: "app", path: "./out", appVersion: [0, 1, 80] }],
+  executables: [{ kind: "app", path: "./out", appVersion: [0, 1, 81] }],
 };
 
 export default deployConfig;
