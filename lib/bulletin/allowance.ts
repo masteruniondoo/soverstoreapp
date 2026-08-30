@@ -138,8 +138,15 @@ export function ensureAccountBulletinReady(
       lookup: (force) => fetchAllowance(address, force),
       isActive: (allowance) => allowance.usable,
       authorize: (report) => requestFaucetAllowance(address, report),
-      // The reference Console waits for Finalized, then reads storage once.
-      confirmationAttempts: 1,
+      // A brief fork can strand the SDK's finality tracking on a block hash
+      // that gets reorged out, even though the same extrinsic finalizes on
+      // the canonical chain moments later. Stop waiting on that promise after
+      // 20s and confirm directly from chain state instead; a couple of
+      // spaced-out retries absorb the rare read-after-write lag either path
+      // can hit right after finalization.
+      authorizeTimeoutMs: 20_000,
+      confirmationAttempts: 3,
+      confirmationDelayMs: 2_000,
     },
     (progress) => forwardProgress(onProgress, progress),
   );

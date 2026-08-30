@@ -19,6 +19,14 @@ export type BulletinAuthorizationFlowOptions<TAuthorization> = {
   authorize: (onProgress: (message: string) => void) => Promise<void>;
   confirmationAttempts?: number;
   confirmationDelayMs?: number;
+  /**
+   * If `authorize()` has not settled after this many ms, stop waiting on it
+   * and check the chain directly instead. A finality-tracking promise can
+   * hang indefinitely after following a block hash that a brief reorg then
+   * dropped, even though the same extrinsic finalized on the canonical chain
+   * moments later -- the confirmation lookup below still finds it.
+   */
+  authorizeTimeoutMs?: number;
   sleep?: (milliseconds: number) => Promise<void>;
 };
 
@@ -147,9 +155,34 @@ export class BulletinAuthorizationCoordinator<TAuthorization> {
         ? "Bulletin authorization expired. Starting automatic authorization..."
         : "No Bulletin authorization found. Starting automatic authorization...",
     });
-    await options.authorize((message) => {
-      emit({ stage: "authorizing", message });
-    });
+
+    let authorizeError: unknown;
+    let authorizeSettled = false;
+    const authorizePromise = options
+      .authorize((message) => emit({ stage: "authorizing", message }))
+      .then(
+        () => {
+          authorizeSettled = true;
+        },
+        (error: unknown) => {
+          authorizeSettled = true;
+          authorizeError = error;
+        },
+      );
+
+    const authorizeTimeoutMs = options.authorizeTimeoutMs;
+    if (authorizeTimeoutMs !== undefined) {
+      await Promise.race([authorizePromise, sleep(authorizeTimeoutMs)]);
+      if (!authorizeSettled) {
+        emit({
+          stage: "confirming",
+          message:
+            "Still waiting for the authorization transaction's finality confirmation. Checking Bulletin directly...",
+        });
+      }
+    } else {
+      await authorizePromise;
+    }
 
     let lastError: unknown;
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -179,6 +212,14 @@ export class BulletinAuthorizationCoordinator<TAuthorization> {
       if (attempt < attempts) await sleep(delayMs);
     }
 
+    // A timed-out authorize() can still reject afterward (e.g. the SDK
+    // eventually gives up on the reorged-out block hash). That real failure
+    // reason is more actionable than the generic confirmation error below.
+    if (authorizeError !== undefined) {
+      throw authorizeError instanceof Error
+        ? authorizeError
+        : new Error(errorMessage(authorizeError));
+    }
     throw new BulletinAuthorizationConfirmationError(lastError);
   }
 }
