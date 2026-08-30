@@ -15,6 +15,8 @@ export type FileStatus = "active" | "expiring-soon" | "expired";
 export type FileRecord = UploadHistoryEntry & {
   expiresAtBlock: number | null;
   blocksRemaining: number | null;
+  /** Share of the retention period still left, 0-100. `null` until chain info loads. */
+  percentRemaining: number | null;
   status: FileStatus | null;
 };
 
@@ -65,23 +67,28 @@ export function useUploadHistory(account: string | null) {
   const records = useMemo<FileRecord[]>(
     () =>
       entries.map((entry) => {
-        if (currentBlock === null || retentionPeriod === null) {
+        if (currentBlock === null || retentionPeriod === null || retentionPeriod <= 0) {
           return {
             ...entry,
             expiresAtBlock: null,
             blocksRemaining: null,
+            percentRemaining: null,
             status: null,
           };
         }
         const expiresAtBlock = entry.blockNumber + retentionPeriod;
         const blocksRemaining = expiresAtBlock - currentBlock;
+        const percentRemaining = Math.max(
+          0,
+          Math.min(100, (blocksRemaining / retentionPeriod) * 100),
+        );
         const status: FileStatus =
           blocksRemaining <= 0
             ? "expired"
             : blocksRemaining < EXPIRING_SOON_THRESHOLD_BLOCKS
               ? "expiring-soon"
               : "active";
-        return { ...entry, expiresAtBlock, blocksRemaining, status };
+        return { ...entry, expiresAtBlock, blocksRemaining, percentRemaining, status };
       }),
     [entries, currentBlock, retentionPeriod],
   );
@@ -92,11 +99,7 @@ export function useUploadHistory(account: string | null) {
       signer: PolkadotSigner,
       onProgress: (message: string) => void,
     ) => {
-      const location = await renewStoredData(
-        { blockNumber: entry.blockNumber, extrinsicIndex: entry.extrinsicIndex },
-        signer,
-        onProgress,
-      );
+      const location = await renewStoredData(entry.cid, signer, onProgress);
       updateUploadHistoryLocation(entry.cid, entry.account, location);
       await refreshChainInfo();
     },

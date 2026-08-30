@@ -1,3 +1,4 @@
+import { parseCid } from "@parity/bulletin-sdk";
 import { Enum, type PolkadotSigner } from "polkadot-api";
 import { submitAndWatch, type TxStatus } from "@parity/product-sdk-tx";
 import { ensureTransactionSigningPermission } from "@/lib/wallet";
@@ -10,6 +11,12 @@ export type StoredDataLocation = {
   blockNumber: number;
   extrinsicIndex: number;
 };
+
+function toHex(bytes: Uint8Array): `0x${string}` {
+  let hex = "";
+  for (const byte of bytes) hex += byte.toString(16).padStart(2, "0");
+  return `0x${hex}`;
+}
 
 /** Blocks a stored (ephemeral) transaction survives before it is dropped unless renewed. */
 export async function fetchRetentionPeriod(): Promise<number> {
@@ -43,11 +50,17 @@ function statusMessage(status: TxStatus): string {
  * retention period via `TransactionStorage.force_renew`. Requires the same
  * active account authorization as `store`, and charges a normal transaction
  * fee plus the data's size against the caller's `bytes_permanent` allowance.
- * The renewed data moves to a new (block, index) location, which the caller
- * must persist for any future renewal of the same file.
+ *
+ * Addresses the entry by content hash (derived from the CID) rather than
+ * `(block, index)`: that position is the pallet's own internal slot within
+ * `Transactions[block]`, not the extrinsic's position in the block, and the
+ * client has no way to observe it -- passing the tx receipt's block index
+ * there resolves to the wrong entry and the chain rejects it outright
+ * (`InvalidTransaction::Custom(2)`, "Renewed extrinsic not found"). Content
+ * hash has no such ambiguity and needs nothing beyond the CID.
  */
 export async function renewStoredData(
-  location: StoredDataLocation,
+  cid: string,
   signer: PolkadotSigner,
   onProgress: (message: string) => void,
 ): Promise<StoredDataLocation> {
@@ -55,11 +68,9 @@ export async function renewStoredData(
   await ensureTransactionSigningPermission();
   const { api } = await getBulletin();
 
+  const contentHash = toHex(parseCid(cid).multihash.digest);
   const tx = api.tx.TransactionStorage.force_renew({
-    entry: Enum("Position", {
-      block: location.blockNumber,
-      index: location.extrinsicIndex,
-    }),
+    entry: Enum("ContentHash", contentHash),
   });
 
   const result = await submitAndWatch(
