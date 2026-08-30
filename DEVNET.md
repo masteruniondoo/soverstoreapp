@@ -148,6 +148,27 @@ removed). Published application bundle CID:
 transaction:
 `0x8d88539716bc5b4a5f5e2b019aaf04b20c0e3e9dbf93e26082d469b4e7e18c57`.
 
+Release `0.1.74` fixed the automatic faucet request asking `//Eve` (the
+devnet's shared, community-wide `AllowedAuthorizers` budget) for more than
+its remaining quota -- the origin/budget check inside `authorize_account`
+then fails after the extrinsic is already included and finalized, so
+authorization silently never gets written. The grant request now reads
+`//Eve`'s real remaining budget first and caps to it.
+
+Release `0.1.75` deployment completed on 2026-08-30, fixing a related hang:
+a brief chain fork can strand the SDK's finality tracking on a reorged-out
+block hash even though the same extrinsic finalizes moments later on the
+canonical chain, leaving the UI stuck on "waiting for finalization"
+indefinitely despite the authorization already being live on-chain (observed
+and confirmed directly against Products Devnet Bulletin for account
+`5DqNtWnfq9rfFZ7LxuKs2aox2CLDCpzBUVSh4MkAq1We3UzQ`). The flow now stops
+waiting on that promise after 20s and confirms from chain state directly.
+Published application bundle CID:
+`bafybeigsmf5bldxudxbr2sgycp5uu4k7dx7y5uj7kmkkaafbxodyohwhci` (verified: its
+manifest's `deployed_at` and asset hashes match the 0.1.75 build). Content-link
+transaction:
+`0x3e2538cd5d0c32df4c937f20cb4552491061a770e83e93a29638d4c53369e24c`.
+
 ### Drops operating procedure
 
 1. Open `Drops` in the deployed Product and connect the app-scoped owner wallet.
