@@ -528,7 +528,12 @@ function StorageHome() {
             <button
               className="btn btn-ink"
               onClick={() =>
-                downloadRecovery(result.fileBaseName, result.recovery)
+                void downloadRecovery(
+                  result.fileBaseName,
+                  result.recovery,
+                ).catch((e) =>
+                  setError(e instanceof Error ? e.message : String(e)),
+                )
               }
             >
               Download recovery.json

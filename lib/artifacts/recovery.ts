@@ -1,4 +1,5 @@
 import { bytesToBase64, base64ToBytes } from "@/lib/crypto/hash";
+import { saveFile } from "@/lib/files/save-file";
 
 export type RecoveryV1 = {
   format: "proofbox/recovery@1";
@@ -68,13 +69,14 @@ export function parseRecovery(value: string): RecoveryV1 {
   return parsed as RecoveryV1;
 }
 
-export function downloadRecovery(fileName: string, recovery: RecoveryV1): void {
-  const url = URL.createObjectURL(
-    new Blob([JSON.stringify(recovery, null, 2)], { type: "application/json" }),
+export async function downloadRecovery(
+  fileName: string,
+  recovery: RecoveryV1,
+): Promise<void> {
+  const file = new File(
+    [JSON.stringify(recovery, null, 2)],
+    `${fileName}.recovery.json`,
+    { type: "application/json" },
   );
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `${fileName}.recovery.json`;
-  anchor.click();
-  URL.revokeObjectURL(url);
+  await saveFile(file);
 }

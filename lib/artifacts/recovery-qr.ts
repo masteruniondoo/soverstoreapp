@@ -3,6 +3,7 @@
 import jsQR from "jsqr";
 import QRCode from "qrcode";
 import { parseRecovery, type RecoveryV1 } from "@/lib/artifacts/recovery";
+import { saveFile } from "@/lib/files/save-file";
 import { APP_ORIGIN } from "@/lib/runtime-config";
 
 const QR_SIZE = 1024;
@@ -45,12 +46,10 @@ export async function downloadRecoveryQrCard(
       "image/png",
     ),
   );
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `${fileName}.recovery-link-qr.png`;
-  anchor.click();
-  URL.revokeObjectURL(url);
+  const file = new File([blob], `${fileName}.recovery-link-qr.png`, {
+    type: "image/png",
+  });
+  await saveFile(file);
 }
 
 /**

@@ -1,4 +1,5 @@
 import type { ProofyInnerMeta } from "@/lib/blob/format";
+import { saveFile } from "@/lib/files/save-file";
 
 export type RecoveredDocument = {
   meta: ProofyInnerMeta;
@@ -177,44 +178,7 @@ export async function copyDocument(
 export async function downloadDocument(
   result: RecoveredDocument,
 ): Promise<void> {
-  const file = recoveredFile(result);
-  const shareNavigator = navigator as Navigator & {
-    canShare?: (data: ShareData) => boolean;
-  };
-  let shareFailure: string | null = null;
-
-  if (
-    typeof navigator.share === "function" &&
-    shareNavigator.canShare?.({ files: [file] })
-  ) {
-    try {
-      // File-only payload is the most interoperable shape on iOS WebKit.
-      await navigator.share({ files: [file] });
-      return;
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return;
-      shareFailure = error instanceof Error ? error.message : String(error);
-      // A cross-origin sandbox may deny Web Share. Try the Product host next.
-    }
-  }
-
-  const { isInsideContainer, navigateTo } = await import(
-    "@parity/product-sdk-host"
-  );
-  if (await isInsideContainer()) {
-    const navigation = await navigateTo(result.objectUrl);
-    if (navigation.ok) return;
-    throw new Error(
-      `The Polkadot web gateway blocked file export from its sandbox.${shareFailure ? ` Web Share: ${shareFailure}.` : ""} Host navigation: ${navigation.error.message}`,
-    );
-  }
-
-  const anchor = document.createElement("a");
-  anchor.href = result.objectUrl;
-  anchor.download = safeDownloadName(result.meta);
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
+  await saveFile(recoveredFile(result));
 }
 
 function hasBytes(content: Uint8Array, expected: number[], offset = 0): boolean {
