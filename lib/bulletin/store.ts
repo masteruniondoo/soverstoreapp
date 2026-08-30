@@ -64,7 +64,7 @@ export function estimateStoreAuthorization(dataSize: number): StoreAuthorization
   };
 }
 
-function progressSigner(
+export function progressSigner(
   signer: PolkadotSigner,
   label: string,
   onProgress: (message: string) => void,

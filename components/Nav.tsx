@@ -34,6 +34,12 @@ export function Nav() {
           Drops
         </Link>
         <Link
+          className={activePath === "/files" ? "active" : ""}
+          href="/files"
+        >
+          My Files
+        </Link>
+        <Link
           className={activePath === "/about" ? "active" : ""}
           href="/about"
         >

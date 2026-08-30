@@ -6,6 +6,7 @@ import { useAppSession } from "@/components/AppSessionProvider";
 import { Nav } from "@/components/Nav";
 import PreviewPage from "@/app/preview/page";
 import {
+  addUploadHistoryEntry,
   ensureAccountBulletinReady,
   storeBlob,
   type BlobStoreResult,
@@ -236,6 +237,16 @@ function StorageHome() {
         fileBaseName: safeBaseName(selectedFile.name),
         authorAddress: selectedAddress,
       });
+      if (store.blockNumber !== undefined && store.extrinsicIndex !== undefined) {
+        addUploadHistoryEntry({
+          cid: store.cid,
+          fileName: selectedFile.name,
+          size: blob.length,
+          blockNumber: store.blockNumber,
+          extrinsicIndex: store.extrinsicIndex,
+          account: selectedAddress,
+        });
+      }
       setStorageState("done");
       setProgress("Uploaded. Download recovery now.");
       void refreshAllowance(false, true).catch(() => undefined);

@@ -610,6 +610,23 @@ code {
   color: var(--pink-deep);
 }
 
+.drops-state.warning {
+  background: #fff4d6;
+  color: #8a6100;
+}
+
+.drops-state.expired {
+  background: #fff1f4;
+  color: #781f32;
+}
+
+.files-cid-value {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
 .drops-card > h2 {
   margin: 18px 0 20px;
   font-size: clamp(25px, 5vw, 36px);
