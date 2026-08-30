@@ -9,6 +9,7 @@ import {
   type UploadHistoryEntry,
 } from "./upload-history";
 import { fetchCurrentBulletinBlock, fetchRetentionPeriod, renewStoredData } from "./renew";
+import { recoverTimedOutBulletinTransport } from "./recovery";
 
 export type FileStatus = "active" | "expiring-soon" | "expired";
 
@@ -49,6 +50,7 @@ export function useUploadHistory(account: string | null) {
       setCurrentBlock(block);
       setRetentionPeriod(retention);
     } catch (error) {
+      if (account && recoverTimedOutBulletinTransport(account, error)) return;
       setChainInfoError(
         error instanceof Error
           ? error.message
@@ -57,7 +59,7 @@ export function useUploadHistory(account: string | null) {
     } finally {
       setLoadingChainInfo(false);
     }
-  }, []);
+  }, [account]);
 
   useEffect(() => {
     if (!account || entries.length === 0) return;

@@ -2,7 +2,8 @@ import { parseCid } from "@parity/bulletin-sdk";
 import { Enum, type PolkadotSigner } from "polkadot-api";
 import { submitAndWatch, type TxStatus } from "@parity/product-sdk-tx";
 import { ensureTransactionSigningPermission } from "@/lib/wallet";
-import { getBulletin } from "./client";
+import { getBulletin, resetBulletin } from "./client";
+import { DIRECT_QUERY_TIMEOUT_MS, runHostQuery, withHostTimeout } from "./host-query";
 import { progressSigner } from "./store";
 
 const RENEW_TX_TIMEOUT_MS = 180_000;
@@ -19,15 +20,44 @@ function toHex(bytes: Uint8Array): `0x${string}` {
 }
 
 /** Blocks a stored (ephemeral) transaction survives before it is dropped unless renewed. */
-export async function fetchRetentionPeriod(): Promise<number> {
-  const { api } = await getBulletin();
-  const period = await api.query.TransactionStorage.RetentionPeriod.getValue();
-  return Number(period);
+export function fetchRetentionPeriod(): Promise<number> {
+  return runHostQuery(
+    async () => {
+      const { api } = await withHostTimeout(
+        getBulletin(),
+        DIRECT_QUERY_TIMEOUT_MS,
+        "the Bulletin chain client",
+      );
+      const period = await withHostTimeout(
+        api.query.TransactionStorage.RetentionPeriod.getValue(),
+        DIRECT_QUERY_TIMEOUT_MS,
+        "the retention period",
+      );
+      return Number(period);
+    },
+    resetBulletin,
+    "Retention period lookup",
+  );
 }
 
-export async function fetchCurrentBulletinBlock(): Promise<number> {
-  const { api } = await getBulletin();
-  return Number(await api.query.System.Number.getValue());
+export function fetchCurrentBulletinBlock(): Promise<number> {
+  return runHostQuery(
+    async () => {
+      const { api } = await withHostTimeout(
+        getBulletin(),
+        DIRECT_QUERY_TIMEOUT_MS,
+        "the Bulletin chain client",
+      );
+      const block = await withHostTimeout(
+        api.query.System.Number.getValue(),
+        DIRECT_QUERY_TIMEOUT_MS,
+        "the current Bulletin block",
+      );
+      return Number(block);
+    },
+    resetBulletin,
+    "Current block lookup",
+  );
 }
 
 function statusMessage(status: TxStatus): string {

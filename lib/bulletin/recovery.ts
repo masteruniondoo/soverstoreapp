@@ -46,12 +46,13 @@ export function clearBulletinTransportRecovery(): void {
  * (not another in-session retry) can recover from: Desktop can swap the
  * underlying MessagePort at any point after wallet connection, and the page
  * has no way to notice that swap without reloading. Bulletin authorization
- * itself uses the direct Devnet faucet transaction; only the host-routed
- * chain query can require this recovery.
+ * itself uses the direct Devnet faucet transaction; only a host-routed chain
+ * query (authorization lookup, balance, retention period, ...) can require
+ * this recovery -- see lib/bulletin/host-query.ts.
  */
 export function isBulletinTransportTimeout(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return message.includes("Bulletin authorization query timed out");
+  return message.includes("Bulletin host query timed out");
 }
 
 /**
