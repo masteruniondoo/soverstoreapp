@@ -139,6 +139,15 @@ verified on-chain as `{"$v":1,"kind":"app","appVersion":[0,1,34]}` in
 transaction
 `0xc9f3619568d0caa4c5ac54898a9069af880c9152c2128171e545806c378ef479`.
 
+Release `0.1.73` deployment completed on 2026-08-30. This release fully
+automates Bulletin authorization after wallet connect (automatic
+lookup/authorize/confirm against the same devnet `//Eve` faucet mechanism the
+Bulletin Console uses, with every manual "Request Bulletin allowance" button
+removed). Published application bundle CID:
+`bafk2bzacecaualxn2p2c7lfj2vqhvv4qdxqphz6xjhgwf6ubswhsi5raw2wuu`. Content-link
+transaction:
+`0x8d88539716bc5b4a5f5e2b019aaf04b20c0e3e9dbf93e26082d469b4e7e18c57`.
+
 ### Drops operating procedure
 
 1. Open `Drops` in the deployed Product and connect the app-scoped owner wallet.
