@@ -28,7 +28,7 @@ const principles = [
 
 export default function AboutPage() {
   return (
-    <main className="shell story-page">
+    <main className="shell story-page drops-page">
       <Nav />
 
       <header className="story-hero">

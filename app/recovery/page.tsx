@@ -220,7 +220,7 @@ export default function RecoveryPage() {
   }
 
   return (
-    <main className="shell">
+    <main className="shell drops-page">
       <Nav />
       <h1 className="app-title">Recover a document from saved recovery data.</h1>
 

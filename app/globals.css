@@ -1137,7 +1137,7 @@ code {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin-top: 4px;
+  margin: 4px 0 26px;
   padding: 12px 14px;
   border: 1px solid var(--line);
   border-radius: 10px;
