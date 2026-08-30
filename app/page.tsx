@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BulletinError, MAX_FILE_SIZE } from "@parity/bulletin-sdk";
+import { BulletinError } from "@parity/bulletin-sdk";
 import { useAppSession } from "@/components/AppSessionProvider";
+import { BulletinBalanceNotice } from "@/components/BulletinBalanceNotice";
 import { Nav } from "@/components/Nav";
 import PreviewPage from "@/app/preview/page";
 import {
@@ -22,6 +23,7 @@ import {
   encodeBlob,
   encodeInner,
   estimateBlobSize,
+  MAX_UPLOAD_SIZE,
   type ProofyInnerMeta,
 } from "@/lib/blob/format";
 import { aesGcmEncrypt } from "@/lib/crypto/aes";
@@ -83,7 +85,7 @@ function StorageHome() {
     [selectedFile],
   );
   const fileTooLarge =
-    estimatedBlobSize != null && estimatedBlobSize > MAX_FILE_SIZE;
+    estimatedBlobSize != null && estimatedBlobSize > MAX_UPLOAD_SIZE;
   const canUpload =
     selectedFile != null &&
     selectedAccount != null &&
@@ -211,9 +213,9 @@ function StorageHome() {
       const header = buildHeader(iv);
       const blob = encodeBlob(header, ciphertext);
 
-      if (blob.length > MAX_FILE_SIZE) {
+      if (blob.length > MAX_UPLOAD_SIZE) {
         throw new Error(
-          `Encrypted blob is ${formatBytes(BigInt(blob.length))}, above the ${formatBytes(BigInt(MAX_FILE_SIZE))} transaction limit.`,
+          `Encrypted blob is ${formatBytes(BigInt(blob.length))}, above the ${formatBytes(BigInt(MAX_UPLOAD_SIZE))} upload limit.`,
         );
       }
       setStorageState("storing");
@@ -328,6 +330,7 @@ function StorageHome() {
                   : "No active authorization")}
           </span>
         </div>
+        <BulletinBalanceNotice address={selectedAddress} />
       </section>
 
       <section
@@ -422,6 +425,7 @@ function StorageHome() {
                 id="file-upload"
                 className="file-input"
                 type="file"
+                accept="*/*"
                 onChange={(event) =>
                   selectFile(event.target.files?.[0] ?? null)
                 }
@@ -443,9 +447,8 @@ function StorageHome() {
             {fileTooLarge && estimatedBlobSize != null && (
               <p className="error">
                 This encrypted blob is about{" "}
-                {formatBytes(BigInt(estimatedBlobSize))}. The single-transaction
-                limit is{" "}
-                {formatBytes(BigInt(MAX_FILE_SIZE))}.
+                {formatBytes(BigInt(estimatedBlobSize))}. The upload limit is{" "}
+                {formatBytes(BigInt(MAX_UPLOAD_SIZE))}.
               </p>
             )}
             <div className="actions-row">

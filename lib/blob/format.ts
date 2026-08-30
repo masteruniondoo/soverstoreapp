@@ -98,6 +98,15 @@ export function decodeInner(bytes: Uint8Array): {
   };
 }
 
+/**
+ * Practical upload cap, well under the chain's own 64 MiB transaction limit.
+ * Uploads are chunked at 128 KiB, each chunk its own signed, fee-charging
+ * transaction -- a file near the protocol limit would mean hundreds of
+ * mobile approvals and fees for one upload. 1 MiB keeps that to single
+ * digits.
+ */
+export const MAX_UPLOAD_SIZE = 1024 * 1024;
+
 export function estimateBlobSize(file: {
   name: string;
   type: string;

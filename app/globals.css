@@ -94,7 +94,9 @@ code {
 .nav-links {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 14px;
+  row-gap: 8px;
 }
 
 .nav-links a {
@@ -102,6 +104,7 @@ code {
   font-weight: 700;
   font-size: 13px;
   text-decoration: none;
+  white-space: nowrap;
   border-bottom: 2px solid transparent;
   padding-bottom: 3px;
 }

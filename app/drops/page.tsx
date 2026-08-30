@@ -1,9 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { MAX_FILE_SIZE } from "@parity/bulletin-sdk";
 import { ss58ToH160 } from "@parity/product-sdk/address";
 import { useAppSession } from "@/components/AppSessionProvider";
+import { BulletinBalanceNotice } from "@/components/BulletinBalanceNotice";
 import { OpenDropLinkForm } from "@/components/drops/OpenDropLinkForm";
 import { DropShareActions } from "@/components/drops/DropShareActions";
 import { useFocusedDropId } from "@/components/drops/DropRouteContext";
@@ -16,6 +16,7 @@ import {
   encodeBlob,
   encodeInner,
   estimateBlobSize,
+  MAX_UPLOAD_SIZE,
   type ProofyInnerMeta,
 } from "@/lib/blob/format";
 import {
@@ -642,8 +643,8 @@ export default function DropsPage() {
         const file = fileByDrop[key];
         if (!file) throw new Error("Choose one file to publish.");
         const estimatedSize = estimateBlobSize(file);
-        if (estimatedSize > MAX_FILE_SIZE) {
-          throw new Error(`Encrypted blob is approximately ${formatBytes(BigInt(estimatedSize))}, above the ${formatBytes(BigInt(MAX_FILE_SIZE))} limit.`);
+        if (estimatedSize > MAX_UPLOAD_SIZE) {
+          throw new Error(`Encrypted blob is approximately ${formatBytes(BigInt(estimatedSize))}, above the ${formatBytes(BigInt(MAX_UPLOAD_SIZE))} upload limit.`);
         }
 
         const allowance = await ensureAccountBulletinReady(
@@ -679,8 +680,8 @@ export default function DropsPage() {
         const inner = encodeInner(meta, fileBytes);
         const ciphertext = await aesGcmEncrypt(newContentKey, iv, inner);
         const blob = encodeBlob(buildHeader(iv), ciphertext);
-        if (blob.length > MAX_FILE_SIZE) {
-          throw new Error(`Encrypted blob is ${formatBytes(BigInt(blob.length))}, above the ${formatBytes(BigInt(MAX_FILE_SIZE))} limit.`);
+        if (blob.length > MAX_UPLOAD_SIZE) {
+          throw new Error(`Encrypted blob is ${formatBytes(BigInt(blob.length))}, above the ${formatBytes(BigInt(MAX_UPLOAD_SIZE))} upload limit.`);
         }
         const stored = await storeBlob(blob, account.polkadotSigner, (message) => setPublishByDrop((current) => ({
           ...current,
@@ -998,6 +999,9 @@ export default function DropsPage() {
               )}
             </div>
           </div>
+          <div className="rail">
+            <BulletinBalanceNotice address={account?.address ?? null} />
+          </div>
           <form className="drops-owner-form" onSubmit={createDrop}>
             <label>
               Public announced name
@@ -1172,6 +1176,7 @@ export default function DropsPage() {
                       Choose the real file
                       <input
                         type="file"
+                        accept="*/*"
                         onChange={(event) => setFileByDrop((current) => ({
                           ...current,
                           [key]: event.target.files?.[0],
@@ -1182,11 +1187,23 @@ export default function DropsPage() {
                       )}
                     </label>
                   )}
+                  {selectedFile && estimateBlobSize(selectedFile) > MAX_UPLOAD_SIZE && (
+                    <p className="drops-open-error" role="alert">
+                      This encrypted blob is about{" "}
+                      {formatBytes(BigInt(estimateBlobSize(selectedFile)))}. The
+                      upload limit is {formatBytes(BigInt(MAX_UPLOAD_SIZE))}.
+                    </p>
+                  )}
                   <div className="actions-row">
                     <button
                       className="btn btn-ink"
                       type="button"
-                      disabled={publishState.status === "working" || (!selectedFile && !retry)}
+                      disabled={
+                        publishState.status === "working" ||
+                        (!selectedFile && !retry) ||
+                        (selectedFile != null &&
+                          estimateBlobSize(selectedFile) > MAX_UPLOAD_SIZE)
+                      }
                       onClick={() => void publishDrop(drop)}
                     >
                       {publishState.status === "working" ? "Publishing..." : retry ? "Retry envelopes / publish" : "Publish file"}

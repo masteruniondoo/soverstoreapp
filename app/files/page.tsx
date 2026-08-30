@@ -3,6 +3,7 @@
 import { useCallback, useState } from "react";
 import { BulletinError } from "@parity/bulletin-sdk";
 import { useAppSession } from "@/components/AppSessionProvider";
+import { BulletinBalanceNotice } from "@/components/BulletinBalanceNotice";
 import { Nav } from "@/components/Nav";
 import {
   ensureAccountBulletinReady,
@@ -175,6 +176,7 @@ export default function MyFilesPage() {
                     : "No active authorization"}
               </span>
             </div>
+            <BulletinBalanceNotice address={selectedAddress} />
           </section>
 
           {records.length === 0 ? (
