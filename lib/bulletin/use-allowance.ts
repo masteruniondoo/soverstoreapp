@@ -15,14 +15,21 @@ export function useBulletinAllowance(address: string | null) {
   } | null>(null);
   addressRef.current = address;
 
+  // Every caller (connect-time authorization, pre-upload refresh, renew) already
+  // guards its own result against staleness before calling this -- e.g. the
+  // Storage page's authorizationRunRef is bumped, invalidating an in-flight
+  // run's runId check, the moment the user selects a different account. Gating
+  // this on `addressRef.current === target` a second time added nothing but a
+  // way for the visible state to silently miss a legitimate, freshly-confirmed
+  // result if that ref had not yet caught up to the latest render when this
+  // fired -- surfacing as "authorized on-chain, but the UI never updates until
+  // a manual refresh" after a brand-new account's first authorization.
   const setKnownAllowance = useCallback((target: string, next: Allowance | null) => {
     knownRef.current = { address: target, allowance: next };
     revisionRef.current += 1;
-    if (addressRef.current === target) {
-      setAllowance(next);
-      setError(null);
-      setChecking(false);
-    }
+    setAllowance(next);
+    setError(null);
+    setChecking(false);
   }, []);
 
   const refresh = useCallback(async (
