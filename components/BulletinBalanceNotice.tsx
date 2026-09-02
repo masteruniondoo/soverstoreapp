@@ -3,13 +3,15 @@
 import { formatPas, LOW_BALANCE_THRESHOLD } from "@/lib/bulletin/balance";
 import { useBulletinBalance } from "@/lib/bulletin/use-bulletin-balance";
 
-const FAUCET_URL = "https://faucet.polkadot.io/paseo?parachain=1010";
+// Matches the verified PAS faucet reference already used elsewhere in this
+// project for the same account (see CONTEXT.md): Paseo Asset Hub, para 1000.
+const FAUCET_URL = "https://faucet.polkadot.io/paseo?parachain=1000";
 
 /**
  * Storage and renewal transactions charge a normal fee, unlike the feeless
- * authorization faucet -- the connected account needs its own PAS on
- * Products Devnet Bulletin to pay it, or the transaction is rejected before
- * it ever reaches the chain.
+ * authorization faucet -- the Product host sponsors that fee from the
+ * connected account's balance on Paseo Asset Hub, so that is the balance
+ * that needs to be non-zero, not a balance on Bulletin itself.
  */
 export function BulletinBalanceNotice({ address }: { address: string | null }) {
   const { balance, checking } = useBulletinBalance(address);
@@ -41,8 +43,8 @@ export function BulletinBalanceNotice({ address }: { address: string | null }) {
       </div>
       {low && (
         <p className="balance-card-note">
-          Uploads and renewals need PAS on Products Devnet Bulletin to pay
-          their transaction fee.
+          Uploads and renewals need PAS on Paseo Asset Hub to pay their
+          transaction fee.
         </p>
       )}
     </div>

@@ -1,45 +1,22 @@
-import { getBulletin, resetBulletin } from "./client";
-import { DIRECT_QUERY_TIMEOUT_MS, runHostQuery, withHostTimeout } from "./host-query";
+import { getAssetHubBalance } from "@/lib/drops/contract";
 
-/** Paseo/Bulletin native token uses 10 decimals, matching the rest of this app's PAS handling. */
+/** Paseo native token uses 10 decimals. */
 const PAS_UNIT = 10n ** 10n;
 
 /** Below this, a normal store/force_renew fee is at real risk of not being coverable. */
 export const LOW_BALANCE_THRESHOLD = PAS_UNIT / 100n; // 0.01 PAS
 
 /**
- * Bulletin's runtime configures `pallet_balances::Config::AccountStore =
- * System` (see runtimes/bulletin-paseo/src/lib.rs upstream): account
- * balances live in `System.Account`, and `Balances.Account` is an unused
- * shim that always reads back the default (zero) value. Reading the wrong
- * one is why this used to show 0 PAS for funded accounts.
- *
- * Guarded with the same host-readiness/timeout/retry treatment as the
- * authorization lookup: querying immediately after a mobile wallet connect,
- * before the host channel handshake has settled, otherwise hangs forever
- * with no error and no result -- this is why the balance could appear to
- * simply never load on the mobile app.
+ * Bulletin transactions are fee-sponsored through the Product host from the
+ * connected account's balance on Paseo Asset Hub, not a balance on the
+ * Bulletin chain itself -- Bulletin's own native balance is never charged
+ * and does not need to hold anything. Reuses the same
+ * `getChainAPI("devnet").assetHub` connection Drops already relies on for
+ * its own balance checks.
  */
-export function fetchBulletinFreeBalance(address: string): Promise<bigint> {
-  return runHostQuery(
-    async () => {
-      const { api } = await withHostTimeout(
-        getBulletin(),
-        DIRECT_QUERY_TIMEOUT_MS,
-        "the Bulletin chain client",
-      );
-      const account = await withHostTimeout(
-        api.query.System.Account.getValue(address) as Promise<{
-          data: { free: bigint };
-        }>,
-        DIRECT_QUERY_TIMEOUT_MS,
-        "the account balance",
-      );
-      return account.data.free;
-    },
-    resetBulletin,
-    "Balance lookup",
-  );
+export async function fetchFeePayerBalance(address: string): Promise<bigint> {
+  const balance = await getAssetHubBalance(address);
+  return balance.spendable;
 }
 
 export function formatPas(value: bigint): string {

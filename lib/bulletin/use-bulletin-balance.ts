@@ -1,8 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { fetchBulletinFreeBalance } from "./balance";
-import { recoverTimedOutBulletinTransport } from "./recovery";
+import { fetchFeePayerBalance } from "./balance";
 
 export function useBulletinBalance(address: string | null) {
   const [balance, setBalance] = useState<bigint | null>(null);
@@ -15,12 +14,8 @@ export function useBulletinBalance(address: string | null) {
     }
     setChecking(true);
     try {
-      setBalance(await fetchBulletinFreeBalance(address));
-    } catch (error) {
-      // A timed-out host transport recovers only via a full page reload (see
-      // recovery.ts) -- this document is about to be replaced, so leave
-      // balance/checking state as-is rather than flashing an error state.
-      if (recoverTimedOutBulletinTransport(address, error)) return;
+      setBalance(await fetchFeePayerBalance(address));
+    } catch {
       setBalance(null);
     } finally {
       setChecking(false);
