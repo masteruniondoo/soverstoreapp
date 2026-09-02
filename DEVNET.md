@@ -169,6 +169,25 @@ manifest's `deployed_at` and asset hashes match the 0.1.75 build). Content-link
 transaction:
 `0x3e2538cd5d0c32df4c937f20cb4552491061a770e83e93a29638d4c53369e24c`.
 
+### dot-store listing
+
+Set on 2026-09-02 via `dotns text set soverstore.dot <key> <value> --env devnet`
+(confirmed on-chain with `dotns text view`, all three present):
+
+- `manifest`: `{"displayName":"SoverStore","description":"Encrypt files
+  locally, store ciphertext on Polkadot Bulletin, and recover them
+  privately."}`
+- `screenshots`:
+  `bafybeidjosi4s2isltt4wfl7udheeo55q2lkg47vvjlqfdd437bgvnyuqm` (home),
+  `bafybeif74xtfje2rvduqreqs77lta7tfycm3ne2ohtuz242xm47rlvga5q` (drops) --
+  both uploaded to Bulletin via `dotns bulletin upload`. Bulletin retains
+  data for roughly two weeks; re-upload and re-set this record before the
+  CIDs lapse, or dot-store falls back to its own capture.
+- `category`: `tools`
+
+dot-store is a third-party app (not this repo); it picks up domain text
+records on its own hourly crawl, separate from this app's own deployment.
+
 ### Drops operating procedure
 
 1. Open `Drops` in the deployed Product and connect the app-scoped owner wallet.
