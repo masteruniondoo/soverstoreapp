@@ -286,13 +286,20 @@ export default function RecoveryPage() {
             onClose={() => setScanning(false)}
           />
         ) : (
-          <button
-            className="btn btn-ink"
-            type="button"
-            onClick={() => setScanning(true)}
-          >
-            Scan QR code
-          </button>
+          <>
+            <button
+              className="btn btn-ink"
+              type="button"
+              onClick={() => setScanning(true)}
+            >
+              Scan QR code
+            </button>
+            <small>
+              Camera access currently only works inside the mobile app.
+              Desktop and browser tabs cannot reach the camera yet — use
+              &quot;Import QR image&quot; there instead.
+            </small>
+          </>
         )}
 
         <div className="input-divider">
