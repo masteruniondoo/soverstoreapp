@@ -20,15 +20,39 @@ function trustedRecoveryOrigins(): Set<string> {
   return origins;
 }
 
+/**
+ * The link a recovery QR carries: it opens the recovery route with the
+ * recovery document in the fragment, so it never travels to a server.
+ *
+ * Exported because the gateway cannot download anything - its sandbox carries
+ * no `allow-downloads` - and the same link then has to be shown and copied
+ * instead of saved. One builder for both paths keeps the shown link and the
+ * encoded one from ever drifting apart.
+ */
+export function recoveryLink(recovery: RecoveryV1): string {
+  const encodedRecovery = encodeURIComponent(JSON.stringify(recovery));
+  return (
+    `${recoveryAppOrigin()}/recovery/?chainBackend=rpc-gateway` +
+    `#recovery=${encodedRecovery}`
+  );
+}
+
+/** The same QR the card carries, as a data URL for display in the page. */
+export async function recoveryQrDataUrl(recovery: RecoveryV1): Promise<string> {
+  return QRCode.toDataURL(recoveryLink(recovery), {
+    width: QR_SIZE,
+    margin: 4,
+    errorCorrectionLevel: "Q",
+    color: { dark: "#000000", light: "#ffffff" },
+  });
+}
+
 export async function downloadRecoveryQrCard(
   fileName: string,
   recovery: RecoveryV1,
 ): Promise<void> {
   const canvas = document.createElement("canvas");
-  const encodedRecovery = encodeURIComponent(JSON.stringify(recovery));
-  const recoveryUrl =
-    `${recoveryAppOrigin()}/recovery/?chainBackend=rpc-gateway` +
-    `#recovery=${encodedRecovery}`;
+  const recoveryUrl = recoveryLink(recovery);
 
   await QRCode.toCanvas(canvas, recoveryUrl, {
     width: QR_SIZE,

@@ -1792,6 +1792,39 @@ code {
   margin-top: 20px;
 }
 
+/* Shown when a download cannot be relied on: the gateway sandboxes this app
+   without allow-downloads, so the recovery has to be readable and copyable. */
+.recovery-artifacts {
+  margin-top: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.recovery-qr-image {
+  width: 256px;
+  max-width: 100%;
+  height: auto;
+  align-self: center;
+  background: #fff;
+  border: 2px solid var(--ink);
+  border-radius: 8px;
+}
+
+.recovery-text {
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 12px;
+  border: 2px solid var(--ink);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  resize: vertical;
+  word-break: break-all;
+}
+
 .recovery-loading-screen {
   min-height: 100svh;
   display: grid;

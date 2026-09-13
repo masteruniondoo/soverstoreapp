@@ -6,6 +6,7 @@ import { AddressRow } from "@/components/AddressRow";
 import { useAppSession } from "@/components/AppSessionProvider";
 import { BulletinBalanceNotice } from "@/components/BulletinBalanceNotice";
 import { Nav } from "@/components/Nav";
+import { RecoveryArtifacts } from "@/components/RecoveryArtifacts";
 import { useAndroidFileNotice } from "@/components/useAndroidFileNotice";
 import PreviewPage from "@/app/preview/page";
 import {
@@ -617,6 +618,7 @@ function StorageHome() {
               Download QR card
             </button>
           </div>
+          <RecoveryArtifacts recovery={result.recovery} />
           <p className="warning qr-warning">
             This QR opens the recovery app and previews the document
             automatically. Keep it private: anyone with the QR can recover the
