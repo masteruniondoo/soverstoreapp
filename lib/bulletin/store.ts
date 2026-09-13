@@ -7,10 +7,12 @@ import {
 import {
   submitAndWatch,
   type SubmittableTransaction,
+  type TxEvent,
   type TxResult,
   type TxStatus,
 } from "@parity/product-sdk-tx";
 import type { PolkadotSigner } from "polkadot-api";
+import { ss58Encode } from "@parity/product-sdk-address";
 import { ensureTransactionSigningPermission } from "@/lib/wallet";
 import { detectSoverStoreRuntime } from "@/lib/runtime/soverstore-runtime";
 import { getBulletin } from "./client";
@@ -211,6 +213,171 @@ async function submitStoreTransaction(
   return result.value;
 }
 
+/**
+ * One chunk, signed now and confirmed later.
+ *
+ * The wallet is asked for a signature and the transaction is broadcast, but
+ * nothing here waits for a block: `signed` resolves the moment the wallet has
+ * answered, so the next chunk's request can go out immediately, while
+ * `included` keeps tracking this one in the background.
+ *
+ * That separation is the point. Waiting for each chunk to be confirmed before
+ * asking for the next signature left the user approving, waiting half a
+ * minute, approving again - minutes of a pairing that has to stay alive
+ * throughout, which is where uploads were dying. Signing straight through
+ * takes as long as the user needs to tap, and the confirmations overlap.
+ *
+ * Every request carries its own explicit nonce. PAPI otherwise reads the nonce
+ * from the finalized block, so overlapping transactions would all claim the
+ * same one and only the first would ever be accepted.
+ */
+/**
+ * What this module needs of a transaction, which is what PAPI actually
+ * provides: the SDK's own `SubmittableTransaction` narrows the options to
+ * `mortality`, and overlapping uploads have to set their nonce explicitly.
+ */
+type NonceControlledTransaction = {
+  signSubmitAndWatch: (
+    signer: PolkadotSigner,
+    options?: {
+      nonce?: number;
+      mortality?: { mortal: boolean; period: number };
+    },
+  ) => {
+    subscribe: (handlers: {
+      next: (event: TxEvent) => void;
+      error: (error: Error) => void;
+    }) => { unsubscribe: () => void };
+  };
+};
+
+type BlockLocation = { number: number; index: number };
+
+type TrackedChunk = {
+  /** Resolves once the wallet has answered this request. */
+  signed: Promise<void>;
+  /** Resolves, with where it landed, once the transaction has reached the
+   *  block state the caller asked for. */
+  included: Promise<BlockLocation>;
+};
+
+function signAndTrack(
+  tx: NonceControlledTransaction,
+  signer: PolkadotSigner,
+  options: {
+    nonce: number;
+    label: string;
+    onProgress: (message: string) => void;
+    maxCallData: number;
+    wallet: string;
+    signedSoFar: number;
+    /** A chunk owes nothing beyond inclusion; the manifest, which names them
+     *  all, is the one transaction worth waiting on for finality. */
+    waitFor: UploadWait;
+  },
+): TrackedChunk {
+  const { label, onProgress } = options;
+
+  let resolveSigned!: () => void;
+  let rejectSigned!: (error: unknown) => void;
+  const signed = new Promise<void>((resolve, reject) => {
+    resolveSigned = resolve;
+    rejectSigned = reject;
+  });
+
+  let resolveIncluded!: (location: BlockLocation) => void;
+  let rejectIncluded!: (error: unknown) => void;
+  const included = new Promise<BlockLocation>((resolve, reject) => {
+    resolveIncluded = resolve;
+    rejectIncluded = reject;
+  });
+  // A rejection is always attached below, but `signed` may be handed back
+  // before the caller awaits `included`; without this, a failure in between
+  // surfaces as an unhandled rejection.
+  included.catch(() => undefined);
+
+  onProgress(`${label}: preparing wallet request...`);
+  const subscription = tx
+    .signSubmitAndWatch(
+      progressSigner(
+        signer,
+        label,
+        onProgress,
+        options.maxCallData,
+        options.wallet,
+        options.signedSoFar,
+      ),
+      { nonce: options.nonce, mortality: { mortal: true, period: 256 } },
+    )
+    .subscribe({
+      next: (event) => {
+        switch (event.type) {
+          case "signed":
+            onProgress(`${label}: signed.`);
+            resolveSigned();
+            break;
+          case "broadcasted":
+            onProgress(`${label}: broadcasting to Bulletin...`);
+            break;
+          case "txBestBlocksState":
+            if (!event.found) return;
+            if (!event.ok) {
+              rejectIncluded(
+                new Error(
+                  `${label} failed on Bulletin: ${JSON.stringify(event.dispatchError)}`,
+                ),
+              );
+              subscription.unsubscribe();
+              return;
+            }
+            onProgress(`${label}: included in a block.`);
+            if (options.waitFor === "best-block") {
+              if (!event.block) {
+                rejectIncluded(
+                  new Error(`${label} was included without reporting its block.`),
+                );
+                subscription.unsubscribe();
+                return;
+              }
+              resolveIncluded({
+                number: event.block.number,
+                index: event.block.index,
+              });
+              subscription.unsubscribe();
+            }
+            break;
+          case "finalized":
+            if (!event.ok) {
+              rejectIncluded(
+                new Error(
+                  `${label} failed on Bulletin: ${JSON.stringify(event.dispatchError)}`,
+                ),
+              );
+              return;
+            }
+            onProgress(`${label}: finalized.`);
+            if (!event.block) {
+              rejectIncluded(
+                new Error(`${label} finalized without reporting its block.`),
+              );
+              return;
+            }
+            resolveIncluded({
+              number: event.block.number,
+              index: event.block.index,
+            });
+            break;
+        }
+      },
+      error: (error: unknown) => {
+        rejectSigned(error);
+        rejectIncluded(error);
+      },
+    });
+
+  return { signed, included };
+}
+
 export async function storeBlob(
   data: Uint8Array,
   signer: PolkadotSigner,
@@ -263,46 +430,79 @@ export async function storeBlob(
       createManifest: true,
     });
 
+    // Each request carries its own nonce, counted up from the account's
+    // current one, because several of them are in flight at once and PAPI
+    // would otherwise read the same nonce from the finalized block for all.
+    const address = ss58Encode(signer.publicKey);
+    const account = (await api.query.System.Account.getValue(address, {
+      at: "best",
+    })) as { nonce: number };
+    let nonce = Number(account.nonce);
+
+    const confirmations: Promise<BlockLocation>[] = [];
     for (const chunk of prepared.chunks) {
       const label = `Chunk ${chunk.index + 1} of ${chunk.totalChunks}`;
-      await submitStoreTransaction(
-        api.tx.TransactionStorage.store({ data: chunk.data }),
+      const tracked = signAndTrack(
+        api.tx.TransactionStorage.store({
+          data: chunk.data,
+        }) as NonceControlledTransaction,
         signer,
-        label,
-        onProgress,
-        maxCallData,
-        "best-block",
-        walletLabel,
-        chunk.index,
+        {
+          nonce: nonce++,
+          label,
+          onProgress,
+          maxCallData,
+          wallet: walletLabel,
+          signedSoFar: chunk.index,
+          waitFor: "best-block",
+        },
       );
+      confirmations.push(tracked.included);
+      // Only the signature is waited for: the user signs straight through
+      // while the chunks already signed make their way into blocks.
+      await tracked.signed;
     }
 
     if (!prepared.manifest) {
       throw new Error("Chunked upload was prepared without a file manifest.");
     }
 
-    const manifestReceipt = await submitStoreTransaction(
+    // The manifest names the chunks, so it must not be signed until they are
+    // all actually in blocks.
+    onProgress(
+      `All ${prepared.chunks.length} chunks signed. Waiting for them to reach Bulletin...`,
+    );
+    await Promise.all(confirmations);
+
+    const manifest = signAndTrack(
       api.tx.TransactionStorage.store_with_cid_config({
         cid: {
           codec: 112n,
           hashing: { type: "Blake2b256" },
         },
         data: prepared.manifest.data,
-      }),
+      }) as NonceControlledTransaction,
       signer,
-      "File manifest",
-      onProgress,
-      maxCallData,
-      "finalized",
-      walletLabel,
-      prepared.chunks.length,
+      {
+        // Continues the same count: the chunks above are in blocks but not yet
+        // finalized, so the chain's own nonce still lags behind them.
+        nonce: nonce++,
+        label: "File manifest",
+        onProgress,
+        maxCallData,
+        wallet: walletLabel,
+        signedSoFar: prepared.chunks.length,
+        waitFor: "finalized",
+      },
     );
+    await manifest.signed;
+    const manifestBlock = await manifest.included;
 
     onProgress("File upload completed.");
     return {
       cid: prepared.manifest.cid.toString(),
-      blockNumber: manifestReceipt.block.number,
-      extrinsicIndex: manifestReceipt.block.index,
+      blockNumber: manifestBlock.number,
+      extrinsicIndex: manifestBlock.index,
       size: data.length,
     };
   } catch (error) {
