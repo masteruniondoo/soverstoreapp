@@ -1,5 +1,5 @@
 import { Enum } from "polkadot-api";
-import { getBulletin, resetBulletin } from "./client";
+import { getAuthorizationsApi, getBulletin, resetBulletin } from "./client";
 import { DIRECT_QUERY_TIMEOUT_MS, runHostQuery, withHostTimeout } from "./host-query";
 
 type AuthorizationRecord = {
@@ -31,8 +31,16 @@ async function queryOnce(
     DIRECT_QUERY_TIMEOUT_MS,
     "the Bulletin chain client",
   );
+  // Read through the descriptor whose Authorizations type matches the runtime
+  // this chain now runs; see getAuthorizationsApi for why devnet_bulletin
+  // cannot decode this one entry.
+  const authorizationsApi = await withHostTimeout(
+    getAuthorizationsApi(),
+    DIRECT_QUERY_TIMEOUT_MS,
+    "the Bulletin chain client",
+  );
   const authorization = await withHostTimeout(
-    api.query.TransactionStorage.Authorizations.getValue(
+    authorizationsApi.query.TransactionStorage.Authorizations.getValue(
       Enum("Account", address),
     ) as Promise<AuthorizationRecord | undefined>,
     DIRECT_QUERY_TIMEOUT_MS,

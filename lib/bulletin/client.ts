@@ -4,6 +4,7 @@ import {
   isConnected,
 } from "@parity/product-sdk/chain";
 import { devnet_bulletin } from "@parity/product-sdk-descriptors/devnet-bulletin";
+import { paseo_bulletin } from "@parity/product-sdk-descriptors/paseo-bulletin";
 import type { PolkadotClient } from "polkadot-api";
 
 type Bulletin = {
@@ -81,6 +82,36 @@ export async function resetBulletin(): Promise<void> {
   } catch {
     // Creation failures already clear their own cache entry.
   }
+}
+
+/**
+ * A second typed view of the same Bulletin connection, for the one storage
+ * entry whose `devnet_bulletin` descriptor no longer matches the chain.
+ *
+ * Devnet Bulletin (genesis 0xe101f0fa…) was upgraded past the runtime the
+ * published descriptors were generated from, so
+ * `TransactionStorage.Authorizations` decodes to a different shape than
+ * `devnet_bulletin` declares - PAPI rejects the read with "Incompatible runtime
+ * entry Storage(TransactionStorage.Authorizations)". Verified against the live
+ * chain: both descriptors 0.8.0 and 0.11.0 fail, so this is the chain moving
+ * on rather than anything this app changed. Every other entry SoverStore uses
+ * (AllowedAuthorizers, RetentionPeriod, System.Number, store,
+ * store_with_cid_config) still matches and keeps using `devnet_bulletin`.
+ *
+ * `paseo_bulletin` is a different chain, but its metadata carries the newer
+ * Authorizations type that this chain now runs, and it decodes the live value
+ * correctly. Only the metadata is borrowed: the connection, and therefore the
+ * chain actually read, stays the Devnet one.
+ *
+ * Revisit when @parity/product-sdk-descriptors ships a devnet_bulletin
+ * regenerated against the current runtime; this indirection can then go.
+ */
+export async function getAuthorizationsApi(): Promise<
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  any
+> {
+  const { client } = await getBulletin();
+  return client.getTypedApi(paseo_bulletin);
 }
 
 /** Resolves once the host-routed Bulletin chain answers, returning its name. */
