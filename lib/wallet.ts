@@ -1,6 +1,8 @@
 import type { PolkadotSigner } from "polkadot-api";
 import { createLazySigner } from "@parity/product-sdk/cloud-storage";
 import {
+  getAccountsProvider,
+  isInsideContainer,
   requestPermission,
   requestResourceAllocation,
   type AllocatableResource,
@@ -12,6 +14,7 @@ import {
   type SignerAccount,
   type SignerState,
 } from "@parity/product-sdk/wallet";
+import { resolveHostLogin } from "@/lib/wallet/host-login";
 import { SmartContractAllocationCoordinator } from "@/lib/wallet/smart-contract-allocation";
 
 export type AppWalletAccount = {
@@ -36,6 +39,13 @@ const hostManager = new SignerManager({
       : new DevProvider(),
 });
 const HOST_PERMISSION_TIMEOUT_MS = 15_000;
+// isInsideContainer() only reads the environment, so it answers immediately or
+// not at all. requestLogin deliberately has no deadline of its own: on the web
+// gateway it is answered by scanning a QR code with a phone, and a timer here
+// would cancel the pairing the user is in the middle of.
+const HOST_DETECT_TIMEOUT_MS = 12_000;
+const HOST_LOGIN_REASON =
+  "SoverStore needs your Polkadot account to encrypt, publish and recover your files.";
 // The host can keep a first-time smart-contract allocation prompt open for 60 seconds.
 // Leave enough time for the decision to travel back over the Desktop bridge;
 // a 30-second deadline could reject an approval that was still being handled.
@@ -44,6 +54,7 @@ const HOST_POST_CONNECT_SETTLE_MS = 2_500;
 const HOST_RELOAD_DELAY_MS = 2_500;
 let connectPromise: Promise<AppWalletAccount[]> | null = null;
 let chainSubmitPermissionVerified = false;
+let hostLoginVerified = false;
 const smartContractAllocation = new SmartContractAllocationCoordinator(
   () => typeof window === "undefined" ? null : window.sessionStorage,
   undefined,
@@ -129,6 +140,44 @@ async function verifyChainSubmitPermission(): Promise<void> {
   chainSubmitPermissionVerified = true;
 }
 
+/**
+ * Run the host login ahead of SignerManager, so the host's own prompt - the
+ * pairing QR on the web gateway - appears instead of an immediate "no accounts"
+ * error. See lib/wallet/host-login.ts for why SignerManager cannot do this.
+ */
+async function ensureHostLogin(): Promise<void> {
+  if (hostLoginVerified) return;
+
+  const outcome = await resolveHostLogin(
+    {
+      isInsideContainer: () =>
+        withTimeout(
+          isInsideContainer(),
+          HOST_DETECT_TIMEOUT_MS,
+          "Products host detection",
+        ),
+      getAccountsProvider,
+    },
+    HOST_LOGIN_REASON,
+  );
+
+  switch (outcome.status) {
+    case "logged-in":
+      hostLoginVerified = true;
+      return;
+    case "no-host":
+      return;
+    case "declined":
+      throw new Error(
+        "Wallet access was declined. Connect again and approve it to continue.",
+      );
+    case "failed":
+      throw new Error(
+        `The Polkadot host could not sign you in: ${outcome.detail}.`,
+      );
+  }
+}
+
 export type AppWalletSnapshot = {
   status: SignerState["status"];
   accounts: AppWalletAccount[];
@@ -155,6 +204,7 @@ export function subscribeHostWallet(listener: () => void): () => void {
       hostWasConnected = true;
     } else {
       chainSubmitPermissionVerified = false;
+      hostLoginVerified = false;
 
       // TruAPI 0.6 keeps the first injected MessagePort in a module-level
       // client cache even after that port closes. SignerManager therefore logs
@@ -231,6 +281,10 @@ export async function connectHostWallet(): Promise<AppWalletAccount[]> {
 
   if (!connectPromise) {
     connectPromise = (async () => {
+      // Ahead of SignerManager, so the host's own login (and its pairing QR on
+      // the web gateway) appears instead of an immediate "no accounts" error.
+      await ensureHostLogin();
+
       const connected = await hostManager.connect();
       if (!connected.ok) throw connected.error;
 
