@@ -39,3 +39,10 @@ test("the call-data ceiling admits the chunk itself but never a second one", () 
     assert.ok(maxCallData < chunkSize * 2, `${runtime}: a doubled payload must be refused`);
   }
 });
+
+test("an error names the wallet that was actually asked", () => {
+  // Blaming Desktop in a browser tab sends the user looking in the wrong place.
+  assert.equal(signingLimits("polkadot-desktop").walletLabel, "Polkadot Desktop");
+  assert.match(signingLimits("web-gateway").walletLabel, /paired with this tab/);
+  assert.match(signingLimits("unknown").walletLabel, /paired with this tab/);
+});

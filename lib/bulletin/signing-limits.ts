@@ -45,6 +45,9 @@ export const PAIRED_WALLET_CHUNK_SIZE = 16 * 1024;
 export type SigningLimits = {
   /** Bytes of file data per store transaction. */
   chunkSize: number;
+  /** What actually answers a signing request here, for use in messages: an
+   *  error naming Desktop is a false lead when a phone is what went quiet. */
+  walletLabel: string;
   /** Hard stop for encoded call data, so an oversized request is refused here
    *  rather than after the user has approved it on the phone. */
   maxCallData: number;
@@ -61,8 +64,19 @@ export function signingLimits(runtime: SoverStoreRuntime): SigningLimits {
       ? NATIVE_HOST_CHUNK_SIZE
       : PAIRED_WALLET_CHUNK_SIZE;
 
+  const walletLabel =
+    runtime === "polkadot-desktop"
+      ? "Polkadot Desktop"
+      : runtime === "polkadot-mobile"
+        ? "the Polkadot app"
+        : "the Polkadot app paired with this tab";
+
   // Call data is the chunk plus the call's own preamble and length prefix -
   // 6 bytes at these sizes. A quarter of the chunk is generous room for that
   // without letting a whole extra chunk through.
-  return { chunkSize, maxCallData: chunkSize + Math.ceil(chunkSize / 4) };
+  return {
+    chunkSize,
+    walletLabel,
+    maxCallData: chunkSize + Math.ceil(chunkSize / 4),
+  };
 }

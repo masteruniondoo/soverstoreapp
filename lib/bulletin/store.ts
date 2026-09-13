@@ -23,8 +23,34 @@ const MOBILE_APPROVAL_REMINDER_MS = 12_000;
 const MOBILE_APPROVAL_DIAGNOSTIC_MS = 45_000;
 const MOBILE_APPROVAL_TIMEOUT_MS = 75_000;
 
-const MOBILE_APPROVAL_TIMEOUT_MESSAGE =
-  "Polkadot Desktop did not return a result from the signing request within 75 seconds. Its signing bridge may have blocked the request before it reached the mobile wallet. The file was not uploaded.";
+/**
+ * What to say when a signing request is never answered.
+ *
+ * Names the wallet that was actually asked, and the one thing that is known to
+ * clear it: the wallet session goes quiet partway through a multi-chunk upload
+ * and stays quiet for later uploads too, so reopening the wallet is what gets
+ * signing working again. Nothing in this app can restart it from here.
+ */
+export class WalletSilentError extends Error {
+  readonly code = "WALLET_DID_NOT_ANSWER";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "WalletSilentError";
+  }
+}
+
+function approvalTimeoutMessage(wallet: string, signedSoFar: number): string {
+  const progress =
+    signedSoFar > 0
+      ? ` The first ${signedSoFar} of this upload's requests were signed normally, so this is the wallet session going quiet rather than the request being refused.`
+      : "";
+  return (
+    `${wallet} did not answer the signing request within 75 seconds.${progress}` +
+    ` Reopen the Polkadot app on your phone - and reconnect it here if it asks - then upload again.` +
+    ` The file was not uploaded.`
+  );
+}
 
 function storeFailureMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
@@ -71,6 +97,8 @@ export function progressSigner(
   label: string,
   onProgress: (message: string) => void,
   maxCallData: number = NATIVE_HOST_CHUNK_SIZE * 2,
+  wallet = "The wallet",
+  signedSoFar = 0,
 ): PolkadotSigner {
   return {
     publicKey: signer.publicKey,
@@ -84,13 +112,13 @@ export function progressSigner(
         );
       }
       // This is the exact point at which PAPI calls the Desktop/mobile signer.
-      onProgress(`${label}: signing request sent. Approve it in the mobile wallet...`);
+      onProgress(`${label}: signing request sent. Approve it in ${wallet}...`);
       const reminder = setTimeout(() => {
-        onProgress(`${label}: still waiting for mobile wallet approval...`);
+        onProgress(`${label}: still waiting for approval in ${wallet}...`);
       }, MOBILE_APPROVAL_REMINDER_MS);
       const diagnostic = setTimeout(() => {
         onProgress(
-          `${label}: Polkadot Desktop has not returned a signing response. If no request is visible on the phone, the Desktop signing bridge did not deliver it...`,
+          `${label}: ${wallet} has not answered yet. If no request is visible there, it did not arrive...`,
         );
       }, MOBILE_APPROVAL_DIAGNOSTIC_MS);
 
@@ -106,7 +134,10 @@ export function progressSigner(
       let approvalTimeout: ReturnType<typeof setTimeout> | undefined;
       const timeout = new Promise<never>((_, reject) => {
         approvalTimeout = setTimeout(
-          () => reject(new Error(MOBILE_APPROVAL_TIMEOUT_MESSAGE)),
+          () =>
+            reject(
+              new WalletSilentError(approvalTimeoutMessage(wallet, signedSoFar)),
+            ),
           MOBILE_APPROVAL_TIMEOUT_MS,
         );
       });
@@ -135,20 +166,46 @@ function statusMessage(label: string, status: TxStatus): string {
   }
 }
 
+/**
+ * How long to hold an upload before moving to the next transaction.
+ *
+ * Bulletin finality trails the best block by 3-6 blocks - roughly 26-52
+ * seconds at its ~8.7s block time - so waiting for it on every chunk turned a
+ * nine-chunk upload into five to eight minutes, with the user's phone asked to
+ * approve a request at each step. That long window is where uploads were
+ * dying: the pairing appears to go stale partway through, after which no
+ * further signing request is answered.
+ *
+ * Chunks therefore continue once they are in a block, and only the last
+ * transaction - the manifest, the one that names the file - waits for
+ * finality. The risk this accepts is a reorg dropping an already-accepted
+ * chunk out from under a finalized manifest, within the 3-6 block window
+ * measured above. Weighed against an upload that reliably fails partway, the
+ * shorter run is the better trade, and the manifest still anchors the result.
+ */
+type UploadWait = "best-block" | "finalized";
+
 async function submitStoreTransaction(
   tx: SubmittableTransaction,
   signer: PolkadotSigner,
   label: string,
   onProgress: (message: string) => void,
   maxCallData: number,
+  waitFor: UploadWait,
+  wallet: string,
+  signedSoFar: number,
 ): Promise<TxResult> {
   onProgress(`${label}: preparing wallet request...`);
-  const result = await submitAndWatch(tx, progressSigner(signer, label, onProgress, maxCallData), {
-    waitFor: "finalized",
-    timeoutMs: UPLOAD_TX_TIMEOUT_MS,
-    mortalityPeriod: 256,
-    onStatus: (status) => onProgress(statusMessage(label, status)),
-  });
+  const result = await submitAndWatch(
+    tx,
+    progressSigner(signer, label, onProgress, maxCallData, wallet, signedSoFar),
+    {
+      waitFor,
+      timeoutMs: UPLOAD_TX_TIMEOUT_MS,
+      mortalityPeriod: 256,
+      onStatus: (status) => onProgress(statusMessage(label, status)),
+    },
+  );
 
   if (!result.ok) throw result.error;
   return result.value;
@@ -166,7 +223,9 @@ export async function storeBlob(
   const { api } = await getBulletin();
   // Which wallet answers the signing request decides how much may travel in
   // one: a QR-paired phone cannot carry what Desktop can.
-  const { chunkSize, maxCallData } = signingLimits(await detectSoverStoreRuntime());
+  const { chunkSize, maxCallData, walletLabel } = signingLimits(
+    await detectSoverStoreRuntime(),
+  );
   const preparer = new BulletinPreparer({
     defaultChunkSize: chunkSize,
     chunkingThreshold: chunkSize,
@@ -186,6 +245,9 @@ export async function storeBlob(
         "Upload",
         onProgress,
         maxCallData,
+        "finalized",
+        walletLabel,
+        0,
       );
 
       return {
@@ -209,6 +271,9 @@ export async function storeBlob(
         label,
         onProgress,
         maxCallData,
+        "best-block",
+        walletLabel,
+        chunk.index,
       );
     }
 
@@ -228,6 +293,9 @@ export async function storeBlob(
       "File manifest",
       onProgress,
       maxCallData,
+      "finalized",
+      walletLabel,
+      prepared.chunks.length,
     );
 
     onProgress("File upload completed.");
@@ -239,6 +307,10 @@ export async function storeBlob(
     };
   } catch (error) {
     if (error instanceof BulletinError) throw error;
+    // Already says what happened and what to do; wrapping it would append a
+    // recovery hint about transaction parameters and nonces, which is a false
+    // lead when the wallet simply never answered.
+    if (error instanceof WalletSilentError) throw error;
     throw new BulletinError(
       storeFailureMessage(error),
       ErrorCode.TRANSACTION_FAILED,
