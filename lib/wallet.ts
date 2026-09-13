@@ -3,6 +3,7 @@ import { createLazySigner } from "@parity/product-sdk/cloud-storage";
 import {
   requestPermission,
   requestResourceAllocation,
+  type AllocatableResource,
 } from "@parity/product-sdk/host";
 import {
   DevProvider,
@@ -190,10 +191,7 @@ export function ensureTransactionSigningPermission(): Promise<void> {
 }
 
 async function ensureResourceAllowance(
-  resource: {
-    tag: "SmartContractAllowance";
-    value: number;
-  },
+  resource: AllocatableResource,
   label: string,
 ): Promise<void> {
   const allocation = await withTimeout(
@@ -217,7 +215,9 @@ export function ensureSmartContractAllowance(address: string): Promise<void> {
     ensureResourceAllowance(
       {
         tag: "SmartContractAllowance",
-        value: 0,
+        // DerivationIndex became a tagged union in truapi 0.13; a bare 0 no
+        // longer type-checks and the host would not decode it.
+        value: { tag: "Index", value: 0 },
       },
       "Smart-contract transaction",
     ));
