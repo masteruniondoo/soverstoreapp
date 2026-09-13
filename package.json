@@ -1,13 +1,13 @@
 {
   "name": "soverstore",
-  "version": "0.1.89",
+  "version": "0.1.90",
   "type": "module",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "lint": "eslint .",
-    "test": "node --test tests/drop-route.test.mjs tests/host-login.test.mjs tests/runtime-classification.test.mjs tests/stall-watchdog.test.mjs tests/smart-contract-allocation.test.mjs"
+    "test": "node --test tests/drop-route.test.mjs tests/host-login.test.mjs tests/runtime-classification.test.mjs tests/stall-watchdog.test.mjs tests/signing-limits.test.mjs tests/smart-contract-allocation.test.mjs"
   },
   "dependencies": {
     "@parity/bulletin-sdk": "^0.3.0",

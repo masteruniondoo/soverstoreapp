@@ -12,18 +12,12 @@ import {
 } from "@parity/product-sdk-tx";
 import type { PolkadotSigner } from "polkadot-api";
 import { ensureTransactionSigningPermission } from "@/lib/wallet";
+import { detectSoverStoreRuntime } from "@/lib/runtime/soverstore-runtime";
 import { getBulletin } from "./client";
+import { signingLimits, NATIVE_HOST_CHUNK_SIZE } from "./signing-limits";
 
-/**
- * Desktop/mobile Host API messages must stay comfortably below the transport
- * limit. Bulletin defaults to 1 MiB chunks (and up to 2 MiB in one tx), which
- * is too large once the signed transaction envelope is added.
- */
-// `createTransaction` transports callData as a hex string, so every raw byte
-// occupies two bytes before the host/mobile envelope is added. 128 KiB keeps
-// the complete signing request well below the Desktop-to-mobile size limit.
-const HOST_SAFE_CHUNK_SIZE = 128 * 1024;
-const MAX_HOST_CALL_DATA_SIZE = 160 * 1024;
+// How large a chunk may be depends on which wallet transport answers the
+// signing request, so it is resolved per upload: see ./signing-limits.
 const UPLOAD_TX_TIMEOUT_MS = 180_000;
 const MOBILE_APPROVAL_REMINDER_MS = 12_000;
 const MOBILE_APPROVAL_DIAGNOSTIC_MS = 45_000;
@@ -52,12 +46,20 @@ export type StoreAuthorization = {
   bytes: bigint;
 };
 
-/** Mirrors the exact chunk and manifest configuration used by storeBlob. */
-export function estimateStoreAuthorization(dataSize: number): StoreAuthorization {
-  if (dataSize <= HOST_SAFE_CHUNK_SIZE) {
+/**
+ * Mirrors the chunk and manifest configuration used by storeBlob.
+ *
+ * Takes the chunk size rather than detecting the runtime, so an estimate can
+ * never describe a different upload than the one that will run.
+ */
+export function estimateStoreAuthorization(
+  dataSize: number,
+  chunkSize: number = NATIVE_HOST_CHUNK_SIZE,
+): StoreAuthorization {
+  if (dataSize <= chunkSize) {
     return { transactions: 1n, bytes: BigInt(dataSize) };
   }
-  const required = estimateAuthorization(dataSize, HOST_SAFE_CHUNK_SIZE, true);
+  const required = estimateAuthorization(dataSize, chunkSize, true);
   return {
     transactions: BigInt(required.transactions),
     bytes: BigInt(required.bytes),
@@ -68,12 +70,13 @@ export function progressSigner(
   signer: PolkadotSigner,
   label: string,
   onProgress: (message: string) => void,
+  maxCallData: number = NATIVE_HOST_CHUNK_SIZE * 2,
 ): PolkadotSigner {
   return {
     publicKey: signer.publicKey,
     signBytes: (data) => signer.signBytes(data),
     signTx: (callData, signedExtensions, metadata, atBlockNumber, hasher) => {
-      if (callData.length > MAX_HOST_CALL_DATA_SIZE) {
+      if (callData.length > maxCallData) {
         return Promise.reject(
           new Error(
             `${label} signing payload is too large for the mobile wallet transport (${callData.length} bytes).`,
@@ -137,9 +140,10 @@ async function submitStoreTransaction(
   signer: PolkadotSigner,
   label: string,
   onProgress: (message: string) => void,
+  maxCallData: number,
 ): Promise<TxResult> {
   onProgress(`${label}: preparing wallet request...`);
-  const result = await submitAndWatch(tx, progressSigner(signer, label, onProgress), {
+  const result = await submitAndWatch(tx, progressSigner(signer, label, onProgress, maxCallData), {
     waitFor: "finalized",
     timeoutMs: UPLOAD_TX_TIMEOUT_MS,
     mortalityPeriod: 256,
@@ -160,9 +164,12 @@ export async function storeBlob(
   }
 
   const { api } = await getBulletin();
+  // Which wallet answers the signing request decides how much may travel in
+  // one: a QR-paired phone cannot carry what Desktop can.
+  const { chunkSize, maxCallData } = signingLimits(await detectSoverStoreRuntime());
   const preparer = new BulletinPreparer({
-    defaultChunkSize: HOST_SAFE_CHUNK_SIZE,
-    chunkingThreshold: HOST_SAFE_CHUNK_SIZE,
+    defaultChunkSize: chunkSize,
+    chunkingThreshold: chunkSize,
     createManifest: true,
   });
 
@@ -171,13 +178,14 @@ export async function storeBlob(
     onProgress("Confirming wallet signing permission...");
     await ensureTransactionSigningPermission();
 
-    if (data.length <= HOST_SAFE_CHUNK_SIZE) {
+    if (data.length <= chunkSize) {
       const prepared = await preparer.prepareStore(data);
       const receipt = await submitStoreTransaction(
         api.tx.TransactionStorage.store({ data: prepared.data }),
         signer,
         "Upload",
         onProgress,
+        maxCallData,
       );
 
       return {
@@ -189,7 +197,7 @@ export async function storeBlob(
     }
 
     const prepared = await preparer.prepareStoreChunked(data, {
-      chunkSize: HOST_SAFE_CHUNK_SIZE,
+      chunkSize,
       createManifest: true,
     });
 
@@ -200,6 +208,7 @@ export async function storeBlob(
         signer,
         label,
         onProgress,
+        maxCallData,
       );
     }
 
@@ -218,6 +227,7 @@ export async function storeBlob(
       signer,
       "File manifest",
       onProgress,
+      maxCallData,
     );
 
     onProgress("File upload completed.");
