@@ -141,12 +141,17 @@ export function ensureAccountBulletinReady(
       // A brief fork can strand the SDK's finality tracking on a block hash
       // that gets reorged out, even though the same extrinsic finalizes on
       // the canonical chain moments later. Stop waiting on that promise after
-      // 20s and confirm directly from chain state instead; a couple of
-      // spaced-out retries absorb the rare read-after-write lag either path
-      // can hit right after finalization.
+      // 20s and confirm directly from chain state instead.
       authorizeTimeoutMs: 20_000,
-      confirmationAttempts: 3,
-      confirmationDelayMs: 2_000,
+      // Devnet Bulletin produces a block roughly every 8.7s, so the previous
+      // 3 x 2s window could close before the authorizing extrinsic had reached
+      // a single new block - reporting "finalized, but not visible on-chain"
+      // for a grant that was perfectly fine, as a reload moments later showed.
+      // The lookup now reads the best block, so inclusion is what has to be
+      // waited for; 6 x 5s covers three blocks at that rate, and still fits
+      // inside the finality lag measured at 3-6 blocks.
+      confirmationAttempts: 6,
+      confirmationDelayMs: 5_000,
     },
     (progress) => forwardProgress(onProgress, progress),
   );
