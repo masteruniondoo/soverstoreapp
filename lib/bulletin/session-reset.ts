@@ -21,8 +21,12 @@
 import { clearAllowanceLookups } from "./allowance";
 import { resetBulletin } from "./client";
 import { clearBulletinTransportRecovery } from "./recovery";
+import { abortActiveUploads } from "./store";
 
 export async function resetBulletinSession(): Promise<void> {
+  // First: a chunk still being tracked would otherwise keep using the client
+  // this function is about to destroy.
+  abortActiveUploads();
   clearAllowanceLookups();
   clearBulletinTransportRecovery();
   // Last: destroying the client can reject in-flight reads, and the caches

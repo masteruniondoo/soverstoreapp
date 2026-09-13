@@ -13,8 +13,10 @@ import {
   addUploadHistoryEntry,
   ensureAccountBulletinReady,
   resetBulletinSession,
+  restartWithNotice,
   startStallWatchdog,
   storeBlob,
+  takeRestartNotice,
   type BlobStoreResult,
 } from "@/lib/bulletin";
 import {
@@ -115,6 +117,13 @@ function StorageHome() {
     !fileTooLarge;
 
   useEffect(() => {
+    const carried = takeRestartNotice(
+      typeof window === "undefined" ? null : window.sessionStorage,
+    );
+    if (carried) setError(carried);
+  }, []);
+
+  useEffect(() => {
     if (!busy && !authorized && storageState === "idle") {
       setProgress(null);
     }
@@ -209,7 +218,7 @@ function StorageHome() {
    * submits. The next upload re-encrypts the file under a new key and uploads
    * it again; the abandoned chunks are orphans no one holds a key for.
    */
-  const resetToStart = useCallback((message: string | null) => {
+  const resetToStart = useCallback((message: string) => {
     uploadRunRef.current += 1;
     setBusy(false);
     setStorageState("idle");
@@ -217,6 +226,17 @@ function StorageHome() {
     setResult(null);
     setError(message);
     void resetBulletinSession();
+
+    // What this page can clear is only half of it. The wallet session, the
+    // chain client's pool and the host transport live outside it, and an
+    // upload abandoned partway leaves them in the state that stops the next
+    // one from working. A fresh document is the only way to be sure none of it
+    // is inherited; the message is carried across so the user still reads it.
+    restartWithNotice(message, {
+      storage: typeof window === "undefined" ? null : window.sessionStorage,
+      reload: () => window.location.reload(),
+      now: () => Date.now(),
+    });
   }, []);
 
   const uploadFile = useCallback(async () => {
@@ -318,16 +338,17 @@ function StorageHome() {
     } catch (e) {
       if (!isCurrentRun()) return;
       if (recoverTimedOutBulletinTransport(selectedAddress, e)) return;
-      // Nothing half-finished is carried into the next attempt: the cached
-      // client, the in-flight allowance lookup and the recovery marker all go.
-      void resetBulletinSession();
-      setStorageState("failed");
-      setProgress(null);
-      if (e instanceof BulletinError) {
-        setError(`${e.message} - ${e.recoveryHint}`);
-      } else {
-        setError(e instanceof Error ? e.message : String(e));
-      }
+      // A failed upload leaves the same wreckage a stalled one does - chunks
+      // signed and in flight, a wallet session that may have stopped
+      // answering - so it ends the same way: back to the start, on a clean
+      // page, with the reason carried across and shown there.
+      resetToStart(
+        e instanceof BulletinError
+          ? `${e.message} - ${e.recoveryHint}`
+          : e instanceof Error
+            ? e.message
+            : String(e),
+      );
     } finally {
       watchdog.stop();
       if (isCurrentRun()) setBusy(false);

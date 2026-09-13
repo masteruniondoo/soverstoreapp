@@ -253,6 +253,29 @@ type NonceControlledTransaction = {
 
 type BlockLocation = { number: number; index: number };
 
+/**
+ * Transaction subscriptions belonging to the upload currently running.
+ *
+ * An upload that is abandoned partway leaves signed chunks still being
+ * tracked. Nobody is waiting on them any more, but they keep the chain client
+ * busy and their eventual failures arrive as rejections no one handles, so the
+ * next upload starts on top of the previous one's wreckage. Cancelling them is
+ * part of starting over.
+ */
+const activeSubscriptions = new Set<{ unsubscribe: () => void }>();
+
+/** Stops tracking every transaction from an upload that is being abandoned. */
+export function abortActiveUploads(): void {
+  for (const subscription of [...activeSubscriptions]) {
+    activeSubscriptions.delete(subscription);
+    try {
+      subscription.unsubscribe();
+    } catch {
+      // An already-closed subscription is exactly what we wanted.
+    }
+  }
+}
+
 type TrackedChunk = {
   /** Resolves once the wallet has answered this request. */
   signed: Promise<void>;
@@ -297,6 +320,9 @@ function signAndTrack(
   included.catch(() => undefined);
 
   onProgress(`${label}: preparing wallet request...`);
+  const forget = () => {
+    activeSubscriptions.delete(subscription);
+  };
   const subscription = tx
     .signSubmitAndWatch(
       progressSigner(
@@ -343,6 +369,7 @@ function signAndTrack(
                 number: event.block.number,
                 index: event.block.index,
               });
+              forget();
               subscription.unsubscribe();
             }
             break;
@@ -366,15 +393,18 @@ function signAndTrack(
               number: event.block.number,
               index: event.block.index,
             });
+            forget();
             break;
         }
       },
       error: (error: unknown) => {
+        forget();
         rejectSigned(error);
         rejectIncluded(error);
       },
     });
 
+  activeSubscriptions.add(subscription);
   return { signed, included };
 }
 

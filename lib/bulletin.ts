@@ -1,6 +1,7 @@
 export * from "./bulletin/allowance";
 export * from "./bulletin/client";
 export * from "./bulletin/renew";
+export * from "./bulletin/restart-notice";
 export * from "./bulletin/retrieve";
 export * from "./bulletin/session-reset";
 export * from "./bulletin/stall-watchdog";
