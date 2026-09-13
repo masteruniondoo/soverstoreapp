@@ -158,6 +158,9 @@ async function ensureHostLogin(): Promise<void> {
         ),
       getAccountsProvider,
     },
+    // The same identifier SignerManager derives from dappName, so both resolve
+    // the one account this app signs with.
+    DAPP_NAME,
     HOST_LOGIN_REASON,
   );
 
@@ -172,6 +175,9 @@ async function ensureHostLogin(): Promise<void> {
         "Wallet access was declined. Connect again and approve it to continue.",
       );
     case "failed":
+      // Raised before SignerManager, which would turn the same failure into a
+      // bare "no accounts" and drop the host's own explanation into a console
+      // warning nobody reads.
       throw new Error(
         `The Polkadot host could not sign you in: ${outcome.detail}.`,
       );

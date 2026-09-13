@@ -22,9 +22,23 @@ export type ResultLike<T> = {
   match<R>(onOk: (value: T) => R, onError: (error: unknown) => R): Promise<R>;
 };
 
+/**
+ * The part of the host's ProductAccount this flow needs. Resolution is what
+ * matters here - SignerManager holds the account itself - so this stays at the
+ * two fields that identify it and cannot drift with the rest of the shape.
+ */
+export type LoginProductAccount = {
+  dotNsIdentifier: string;
+  derivationIndex: number;
+};
+
 export type LoginAccountsProvider = {
   getUserId(): ResultLike<{ primaryUsername: string }>;
   requestLogin(reason?: string): ResultLike<string>;
+  getProductAccount(
+    dotNsIdentifier: string,
+    derivationIndex?: number,
+  ): ResultLike<LoginProductAccount>;
 };
 
 export type HostLoginApi = {
@@ -33,8 +47,8 @@ export type HostLoginApi = {
 };
 
 export type HostLoginOutcome =
-  /** A user is signed in to the host; an account can now be requested. */
-  | { status: "logged-in"; username: string }
+  /** A user is signed in and the app-scoped product account is resolved. */
+  | { status: "logged-in"; username: string; account: LoginProductAccount }
   /**
    * No host, or a host that exposes no accounts provider. Not diagnosed here:
    * SignerManager's own error names the supported ways to open the app, and
@@ -57,6 +71,7 @@ export function describeHostError(error: unknown): string {
 
 export async function resolveHostLogin(
   api: HostLoginApi,
+  dotNsIdentifier: string,
   reason: string,
 ): Promise<HostLoginOutcome> {
   if (!(await api.isInsideContainer())) return { status: "no-host" };
@@ -70,7 +85,7 @@ export async function resolveHostLogin(
     (value) => value.primaryUsername,
     () => null,
   );
-  if (existing !== null) return { status: "logged-in", username: existing };
+  if (existing !== null) return resolveProductAccount(provider, dotNsIdentifier, existing);
 
   const login = await provider.requestLogin(reason).match(
     (response) => response,
@@ -95,5 +110,36 @@ export async function resolveHostLogin(
     };
   }
 
-  return { status: "logged-in", username };
+  return resolveProductAccount(provider, dotNsIdentifier, username);
+}
+
+/**
+ * Resolve the app-scoped product account, and report a failure as one.
+ *
+ * SignerManager does not: when the host cannot derive the account it logs a
+ * warning and resolves connect() with an empty account list, so the app sees
+ * "no accounts" and never learns why. Asking here keeps the host's own reason.
+ */
+async function resolveProductAccount(
+  provider: LoginAccountsProvider,
+  dotNsIdentifier: string,
+  username: string,
+): Promise<HostLoginOutcome> {
+  type Resolved =
+    | { ok: true; value: LoginProductAccount }
+    | { ok: false; error: string };
+
+  const account = await provider.getProductAccount(dotNsIdentifier, 0).match<Resolved>(
+    (value) => ({ ok: true, value }),
+    (error) => ({ ok: false, error: describeHostError(error) }),
+  );
+
+  if (!account.ok) {
+    return {
+      status: "failed",
+      detail: `no product account for ${dotNsIdentifier}: ${account.error}`,
+    };
+  }
+
+  return { status: "logged-in", username, account: account.value };
 }
