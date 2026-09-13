@@ -114,6 +114,15 @@ export function fetchAllowance(
   return pending;
 }
 
+/**
+ * Drops any in-flight lookup so the next call reads the chain again rather
+ * than inheriting a promise from an abandoned upload. Completed lookups are
+ * never cached, so there is nothing else to clear.
+ */
+export function clearAllowanceLookups(): void {
+  allowanceLookups.clear();
+}
+
 function forwardProgress(
   onProgress: (message: string) => void,
   progress: BulletinAuthorizationProgress,

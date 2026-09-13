@@ -11,6 +11,8 @@ import PreviewPage from "@/app/preview/page";
 import {
   addUploadHistoryEntry,
   ensureAccountBulletinReady,
+  resetBulletinSession,
+  startStallWatchdog,
   storeBlob,
   type BlobStoreResult,
 } from "@/lib/bulletin";
@@ -35,6 +37,17 @@ import { BULLETIN_NETWORK_NAME } from "@/lib/runtime-config";
 import {
   recoverTimedOutBulletinTransport,
 } from "@/lib/bulletin/recovery";
+
+/**
+ * How long an upload may report nothing at all before it is treated as stuck.
+ *
+ * Measured between progress reports, not over the whole upload: a healthy
+ * multi-chunk upload runs for minutes, since every chunk waits for Bulletin
+ * finality, which trails the best block by tens of seconds. Every stage does
+ * report as it goes, so a full minute of silence is a stall, not slowness.
+ */
+const UPLOAD_STALL_TIMEOUT_MS = 60_000;
+const UPLOAD_STALL_MESSAGE = "Pokušaj ponovo";
 
 type StorageState =
   | "idle"
@@ -79,6 +92,10 @@ function StorageHome() {
   const [error, setError] = useState<string | null>(null);
   const walletConnectInProgressRef = useRef(false);
   const authorizationRunRef = useRef(0);
+  // Bumped by every upload and by every reset. A run whose id no longer matches
+  // has been abandoned: its progress and its result are dropped rather than
+  // written over whatever the user is looking at now.
+  const uploadRunRef = useRef(0);
 
   const walletConnected = selectedAddress != null;
   const authorizationResolved = allowance !== undefined;
@@ -181,23 +198,61 @@ function StorageHome() {
     [authorized, busy, selectFile],
   );
 
+  /**
+   * Abandons whatever the current attempt is doing and puts the screen back
+   * where it started, so nothing half-finished is inherited by the next try:
+   * no stale client, no in-flight lookup, no leftover progress line.
+   *
+   * What cannot be taken back is the chain: a chunk already in a block stays
+   * there, and a signing request the wallet approves after this point still
+   * submits. The next upload re-encrypts the file under a new key and uploads
+   * it again; the abandoned chunks are orphans no one holds a key for.
+   */
+  const resetToStart = useCallback((message: string | null) => {
+    uploadRunRef.current += 1;
+    setBusy(false);
+    setStorageState("idle");
+    setProgress(null);
+    setResult(null);
+    setError(message);
+    void resetBulletinSession();
+  }, []);
+
   const uploadFile = useCallback(async () => {
     if (!selectedFile || !selectedAccount || !selectedAddress || !canUpload) {
       return;
     }
 
+    const runId = uploadRunRef.current + 1;
+    uploadRunRef.current = runId;
+    const isCurrentRun = () => uploadRunRef.current === runId;
+    // Silence, not slowness, is what this watches: every stage below reports as
+    // it goes, so a full minute without a word means the run is stuck - most
+    // often in a signing request the wallet never answers. Rather than leave
+    // the user in front of a frozen progress line, put the screen back exactly
+    // where it started and say so.
+    const watchdog = startStallWatchdog(UPLOAD_STALL_TIMEOUT_MS, () => {
+      if (!isCurrentRun()) return;
+      resetToStart(UPLOAD_STALL_MESSAGE);
+    });
+    const report = (message: string) => {
+      watchdog.ping();
+      if (isCurrentRun()) setProgress(message);
+    };
+
     setBusy(true);
     setError(null);
     setResult(null);
-    setProgress("Checking Bulletin authorization before upload...");
+    report("Checking Bulletin authorization before upload...");
     try {
       const currentAllowance = await ensureAccountBulletinReady(
         selectedAddress,
-        setProgress,
+        report,
       );
+      if (!isCurrentRun()) return;
       setKnownBulletinAllowance(selectedAddress, currentAllowance);
 
-      setProgress(`Reading ${selectedFile.name}...`);
+      report(`Reading ${selectedFile.name}...`);
       const fileBytes = new Uint8Array(await selectedFile.arrayBuffer());
       const key = randomBytes(32);
       const iv = randomBytes(12);
@@ -210,7 +265,7 @@ function StorageHome() {
       };
 
       setStorageState("encrypting");
-      setProgress("Encrypting locally...");
+      report("Encrypting locally...");
       const inner = encodeInner(meta, fileBytes);
       const ciphertext = await aesGcmEncrypt(key, iv, inner);
       const header = buildHeader(iv);
@@ -225,8 +280,12 @@ function StorageHome() {
       const store = await storeBlob(
         blob,
         selectedAccount.polkadotSigner,
-        setProgress,
+        report,
       );
+      // Start over may have been pressed while the wallet held the signing
+      // request. The upload still finished, but the user has moved on, so it
+      // is recorded in history and left out of the screen they are now on.
+      if (!isCurrentRun()) return;
 
       const recovery = buildRecovery({
         cid: store.cid,
@@ -253,10 +312,14 @@ function StorageHome() {
         });
       }
       setStorageState("done");
-      setProgress("Uploaded. Download recovery now.");
+      report("Uploaded. Download recovery now.");
       void refreshAllowance(false, true).catch(() => undefined);
     } catch (e) {
+      if (!isCurrentRun()) return;
       if (recoverTimedOutBulletinTransport(selectedAddress, e)) return;
+      // Nothing half-finished is carried into the next attempt: the cached
+      // client, the in-flight allowance lookup and the recovery marker all go.
+      void resetBulletinSession();
       setStorageState("failed");
       setProgress(null);
       if (e instanceof BulletinError) {
@@ -265,10 +328,12 @@ function StorageHome() {
         setError(e instanceof Error ? e.message : String(e));
       }
     } finally {
-      setBusy(false);
+      watchdog.stop();
+      if (isCurrentRun()) setBusy(false);
     }
   }, [
     canUpload,
+    resetToStart,
     selectedAccount,
     selectedAddress,
     selectedFile,
