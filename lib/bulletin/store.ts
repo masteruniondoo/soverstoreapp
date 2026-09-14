@@ -356,7 +356,14 @@ function signAndTrack(
               subscription.unsubscribe();
               return;
             }
-            onProgress(`${label}: included in a block.`);
+            onProgress(
+              options.waitFor === "finalized"
+                ? // Bulletin finality trails the best block by 3-6 blocks, so
+                  // this is a real wait and saying so beats a silent screen
+                  // while the recovery artifacts are held back.
+                  `${label}: included in a block; waiting for finalization, usually under a minute...`
+                : `${label}: included in a block.`,
+            );
             if (options.waitFor === "best-block") {
               if (!event.block) {
                 rejectIncluded(
