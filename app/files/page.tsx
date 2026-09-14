@@ -61,6 +61,7 @@ export default function MyFilesPage() {
     useUploadHistory(selectedAddress);
 
   const [connecting, setConnecting] = useState(false);
+  const [connectProgress, setConnectProgress] = useState<string | null>(null);
   const [connectError, setConnectError] = useState<string | null>(null);
   const [renewState, setRenewState] = useState<Record<string, RenewState>>({});
 
@@ -70,14 +71,20 @@ export default function MyFilesPage() {
   const connect = useCallback(async () => {
     setConnecting(true);
     setConnectError(null);
+    setConnectProgress("Connecting wallet...");
     try {
       const connected = await connectSessionWallet();
+      // Granting an authorization can take the better part of a minute. This
+      // page used to discard the progress reports, so a working flow looked
+      // like a stuck one.
       const next = await ensureAccountBulletinReady(
         connected.address,
-        () => undefined,
+        setConnectProgress,
       );
       setKnownBulletinAllowance(connected.address, next);
+      setConnectProgress(null);
     } catch (error) {
+      setConnectProgress(null);
       setConnectError(error instanceof Error ? error.message : String(error));
     } finally {
       setConnecting(false);
@@ -149,6 +156,11 @@ export default function MyFilesPage() {
               {connecting ? "Connecting..." : "Connect"}
             </button>
           </div>
+          {connectProgress && (
+            <p className="progress" role="status">
+              {connectProgress}
+            </p>
+          )}
           {connectError && <p className="error">{connectError}</p>}
         </section>
       ) : (
@@ -252,11 +264,21 @@ export default function MyFilesPage() {
                       <button
                         className="btn btn-pink"
                         type="button"
-                        disabled={state.status === "working" || !authorized}
+                        disabled={
+                          state.status === "working" ||
+                          !authorized ||
+                          !record.ownedByConnectedAccount
+                        }
                         onClick={() => void renewFile(record)}
                       >
                         {state.status === "working" ? "Renewing..." : "Renew"}
                       </button>
+                      {!record.ownedByConnectedAccount && (
+                        <span className="btn-sub">
+                          Uploaded by another account; only that account can
+                          renew it. The file itself is unaffected.
+                        </span>
+                      )}
                     </div>
                     {state.status !== "idle" && (
                       <p

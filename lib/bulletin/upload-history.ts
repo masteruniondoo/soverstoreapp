@@ -59,10 +59,19 @@ export function addUploadHistoryEntry(
   ]);
 }
 
-export function listUploadHistory(account: string): UploadHistoryEntry[] {
-  return readAll().filter(
-    (entry) => entry.account === account && entry.networkId === BULLETIN_NETWORK_ID,
-  );
+/**
+ * Every upload recorded from this browser on this network, newest first.
+ *
+ * Deliberately not filtered to the connected account. The account an app signs
+ * with is derived by the host, and it changed for everyone in the September
+ * migration: filtering by it hid every file uploaded before that, as if they
+ * had been lost. They are still on Bulletin, and reads need no account at all.
+ *
+ * What the account does decide is renewal, which only its owner can sign, so
+ * each entry says whose it is and the caller marks the rest as read-only.
+ */
+export function listUploadHistory(): UploadHistoryEntry[] {
+  return readAll().filter((entry) => entry.networkId === BULLETIN_NETWORK_ID);
 }
 
 /**

@@ -14,6 +14,9 @@ import { recoverTimedOutBulletinTransport } from "./recovery";
 export type FileStatus = "active" | "expiring-soon" | "expired";
 
 export type FileRecord = UploadHistoryEntry & {
+  /** Whether the connected account is the one that uploaded this file, and so
+   *  the only one that can sign a renewal for it. */
+  ownedByConnectedAccount: boolean;
   expiresAtBlock: number | null;
   blocksRemaining: number | null;
   /** Share of the retention period still left, 0-100. `null` until chain info loads. */
@@ -35,8 +38,8 @@ export function useUploadHistory(account: string | null) {
       setEntries([]);
       return;
     }
-    setEntries(listUploadHistory(account));
-    return subscribeUploadHistory(() => setEntries(listUploadHistory(account)));
+    setEntries(listUploadHistory());
+    return subscribeUploadHistory(() => setEntries(listUploadHistory()));
   }, [account]);
 
   const refreshChainInfo = useCallback(async () => {
@@ -69,9 +72,11 @@ export function useUploadHistory(account: string | null) {
   const records = useMemo<FileRecord[]>(
     () =>
       entries.map((entry) => {
+        const ownedByConnectedAccount = entry.account === account;
         if (currentBlock === null || retentionPeriod === null || retentionPeriod <= 0) {
           return {
             ...entry,
+            ownedByConnectedAccount,
             expiresAtBlock: null,
             blocksRemaining: null,
             percentRemaining: null,
@@ -90,9 +95,16 @@ export function useUploadHistory(account: string | null) {
             : blocksRemaining < EXPIRING_SOON_THRESHOLD_BLOCKS
               ? "expiring-soon"
               : "active";
-        return { ...entry, expiresAtBlock, blocksRemaining, percentRemaining, status };
+        return {
+          ...entry,
+          ownedByConnectedAccount,
+          expiresAtBlock,
+          blocksRemaining,
+          percentRemaining,
+          status,
+        };
       }),
-    [entries, currentBlock, retentionPeriod],
+    [account, entries, currentBlock, retentionPeriod],
   );
 
   const renew = useCallback(
