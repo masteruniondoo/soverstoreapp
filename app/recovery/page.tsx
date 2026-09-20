@@ -294,7 +294,7 @@ export default function RecoveryPage() {
         </div>
         <h2 className="input-heading">Paste copied recovery</h2>
         <textarea
-          className="json-input"
+          className="recovery-paste-input"
           aria-label="Copied recovery information"
           placeholder={"CID: bafk...\nRecovery Key: ..."}
           value={pasted}
