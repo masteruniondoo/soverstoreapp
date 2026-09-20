@@ -2,16 +2,64 @@
 
 import jsQR from "jsqr";
 import QRCode from "qrcode";
-import { parseRecovery, type RecoveryV1 } from "@/lib/artifacts/recovery";
+import {
+  isRecoveryRoutePath,
+  parseRecoveryUrl,
+  recoveryAppOrigin,
+  recoveryUrl,
+  type RecoveryDetails,
+} from "@/lib/artifacts/recovery";
+import { parseLegacyRecoveryLink } from "@/lib/artifacts/recovery-legacy";
 import { saveFile } from "@/lib/files/save-file";
-import { APP_ORIGIN } from "@/lib/runtime-config";
 
 const QR_SIZE = 1024;
 
-function recoveryAppOrigin(): string {
-  if (APP_ORIGIN) return APP_ORIGIN.replace(/\/$/, "");
-  if (typeof window !== "undefined") return window.location.origin;
-  throw new Error("The Devnet application origin is not configured.");
+const QR_OPTIONS = {
+  width: QR_SIZE,
+  margin: 4,
+  errorCorrectionLevel: "Q",
+  color: { dark: "#000000", light: "#ffffff" },
+} as const;
+
+/**
+ * What the QR encodes: the recovery link, CID in the query and Recovery Key
+ * in the fragment. A recovery QR is therefore a bearer credential - whoever
+ * photographs it can open the file.
+ */
+export function recoveryQrPayload(recovery: RecoveryDetails): string {
+  return recoveryUrl(recovery);
+}
+
+/** The QR as a data URL, for showing it on the page. */
+export async function recoveryQrDataUrl(
+  recovery: RecoveryDetails,
+): Promise<string> {
+  return QRCode.toDataURL(recoveryQrPayload(recovery), { ...QR_OPTIONS });
+}
+
+/** The same QR as a PNG blob, for the clipboard or a download. */
+export async function recoveryQrPngBlob(
+  recovery: RecoveryDetails,
+): Promise<Blob> {
+  const canvas = document.createElement("canvas");
+  await QRCode.toCanvas(canvas, recoveryQrPayload(recovery), { ...QR_OPTIONS });
+  return new Promise<Blob>((resolve, reject) =>
+    canvas.toBlob(
+      (value) =>
+        value ? resolve(value) : reject(new Error("Could not create QR code.")),
+      "image/png",
+    ),
+  );
+}
+
+export async function downloadRecoveryQrCard(
+  fileName: string,
+  recovery: RecoveryDetails,
+): Promise<void> {
+  const blob = await recoveryQrPngBlob(recovery);
+  await saveFile(
+    new File([blob], `${fileName}.recovery-qr.png`, { type: "image/png" }),
+  );
 }
 
 function trustedRecoveryOrigins(): Set<string> {
@@ -21,96 +69,33 @@ function trustedRecoveryOrigins(): Set<string> {
 }
 
 /**
- * The link a recovery QR carries: it opens the recovery route with the
- * recovery document in the fragment, so it never travels to a server.
- *
- * Exported because the gateway cannot download anything - its sandbox carries
- * no `allow-downloads` - and the same link then has to be shown and copied
- * instead of saved. One builder for both paths keeps the shown link and the
- * encoded one from ever drifting apart.
+ * Validates raw QR text and returns the CID and Recovery Key it carries.
+ * Shared by the static-image and live-camera decode paths, so a scanned code
+ * and an imported screenshot cannot disagree about what a recovery QR is.
  */
-export function recoveryLink(recovery: RecoveryV1): string {
-  const encodedRecovery = encodeURIComponent(JSON.stringify(recovery));
-  return (
-    `${recoveryAppOrigin()}/recovery/?chainBackend=rpc-gateway` +
-    `#recovery=${encodedRecovery}`
-  );
-}
-
-/** The same QR the card carries, as a data URL for display in the page. */
-export async function recoveryQrDataUrl(recovery: RecoveryV1): Promise<string> {
-  return QRCode.toDataURL(recoveryLink(recovery), {
-    width: QR_SIZE,
-    margin: 4,
-    errorCorrectionLevel: "Q",
-    color: { dark: "#000000", light: "#ffffff" },
-  });
-}
-
-export async function downloadRecoveryQrCard(
-  fileName: string,
-  recovery: RecoveryV1,
-): Promise<void> {
-  const canvas = document.createElement("canvas");
-  const recoveryUrl = recoveryLink(recovery);
-
-  await QRCode.toCanvas(canvas, recoveryUrl, {
-    width: QR_SIZE,
-    margin: 4,
-    errorCorrectionLevel: "Q",
-    color: { dark: "#000000", light: "#ffffff" },
-  });
-
-  const blob = await new Promise<Blob>((resolve, reject) =>
-    canvas.toBlob(
-      (value) =>
-        value
-          ? resolve(value)
-          : reject(new Error("Could not create QR code.")),
-      "image/png",
-    ),
-  );
-  const file = new File([blob], `${fileName}.recovery-link-qr.png`, {
-    type: "image/png",
-  });
-  await saveFile(file);
-}
-
-/**
- * Validates raw QR payload text against the two shapes a SoverStore recovery
- * QR can carry (a trusted recovery link, or legacy raw recovery JSON) and
- * returns the recovery text. Shared by the static-image and live-camera
- * decode paths.
- */
-function extractRecoveryFromQrText(data: string): string {
-  if (data.startsWith("https://") || data.startsWith("http://")) {
-    const recoveryUrl = new URL(data);
-    const isRecoveryRoute = [
-      "/",
-      "/preview",
-      "/preview/",
-      "/recovery",
-      "/recovery/",
-    ].includes(recoveryUrl.pathname);
-    if (!trustedRecoveryOrigins().has(recoveryUrl.origin) || !isRecoveryRoute) {
-      throw new Error("The QR code does not contain a SoverStore recovery link.");
-    }
-    const recoveryText = new URLSearchParams(
-      recoveryUrl.hash.slice(1),
-    ).get("recovery");
-    if (!recoveryText) {
-      throw new Error("The recovery link does not contain recovery data.");
-    }
-    parseRecovery(recoveryText);
-    return recoveryText;
+function extractRecoveryFromQrText(data: string): RecoveryDetails {
+  const trimmed = data.trim();
+  if (!/^https?:\/\//i.test(trimmed)) {
+    throw new Error("This QR code does not contain a SoverStore recovery link.");
   }
 
-  // Legacy QR images contain raw recovery JSON.
-  parseRecovery(data);
-  return data;
+  const url = new URL(trimmed);
+  if (
+    !trustedRecoveryOrigins().has(url.origin) ||
+    !isRecoveryRoutePath(url.pathname)
+  ) {
+    throw new Error("This QR code does not contain a SoverStore recovery link.");
+  }
+
+  // QR cards printed before the Recovery Key change carried the whole
+  // recovery document in the fragment instead of a `key=` parameter.
+  const legacy = parseLegacyRecoveryLink(url);
+  return legacy ?? parseRecoveryUrl(trimmed);
 }
 
-export async function decodeRecoveryQrImage(file: File): Promise<string> {
+export async function decodeRecoveryQrImage(
+  file: File,
+): Promise<RecoveryDetails> {
   if (!file.type.startsWith("image/")) {
     throw new Error("Choose a PNG, JPEG, or other image containing a QR code.");
   }
@@ -142,7 +127,9 @@ export async function decodeRecoveryQrImage(file: File): Promise<string> {
  * recovery code -- a live scanner should keep scanning past unrelated QR
  * codes it happens to see, not stop on them.
  */
-export function tryDecodeRecoveryQrFrame(image: ImageData): string | null {
+export function tryDecodeRecoveryQrFrame(
+  image: ImageData,
+): RecoveryDetails | null {
   const decoded = jsQR(image.data, image.width, image.height, {
     inversionAttempts: "dontInvert",
   });

@@ -22,7 +22,7 @@ const principles = [
   {
     number: "03",
     title: "Access that travels",
-    text: "A private recovery file or QR keeps access portable and under your control.",
+    text: "A 256-bit Recovery Key, held only by you, keeps access portable and under your control.",
   },
 ];
 
@@ -55,9 +55,9 @@ export default function AboutPage() {
         <p className="story-copy">
           Private files should not depend on a platform keeping every promise
           forever. SoverStore separates storage from access: decentralized
-          infrastructure preserves the encrypted file, while the recovery
-          credential stays with you. There is no SoverStore server holding a
-          second copy of your document or key—because no such server exists.
+          infrastructure preserves the encrypted file, while the Recovery
+          Key stays with you. There is no SoverStore server holding a second
+          copy of your file or its key—because no such server exists.
         </p>
       </section>
 
@@ -78,8 +78,8 @@ export default function AboutPage() {
           encryption formats, CIDs, or blockchain infrastructure by hand.
         </h2>
         <p>
-          Store a file. Keep the credential. Recover the original wherever the
-          open infrastructure can be reached.
+          Store a file. Keep the Recovery Key. Recover the original wherever
+          the open infrastructure can be reached.
         </p>
       </section>
 

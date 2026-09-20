@@ -1,18 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Nav } from "@/components/Nav";
 import { RecoveryQrScanner } from "@/components/RecoveryQrScanner";
-import { parseRecovery } from "@/lib/artifacts/recovery";
+import {
+  normalizeRecoveryDetails,
+  type RecoveryDetails,
+} from "@/lib/artifacts/recovery";
+import { parseRecoveryInput } from "@/lib/artifacts/recovery-input";
+import { parseLegacyRecoveryLink } from "@/lib/artifacts/recovery-legacy";
 import {
   decodeRecoveryQrImage,
   downloadRecoveryQrCard,
 } from "@/lib/artifacts/recovery-qr";
-import { decodeBlob, decodeInner } from "@/lib/blob/format";
-import { fetchBlobByCid } from "@/lib/bulletin/retrieve";
-import { aesGcmDecrypt } from "@/lib/crypto/aes";
-import { base64ToBytes } from "@/lib/crypto/hash";
 import { formatBytes } from "@/lib/format";
+import { recoverFile } from "@/lib/recovery/recover-file";
 import {
   copyDocument,
   createDocumentUrl,
@@ -22,10 +24,11 @@ import {
 } from "@/lib/recovered-document";
 
 export default function RecoveryPage() {
-  const [recoveryFile, setRecoveryFile] = useState<File | null>(null);
+  const [cid, setCid] = useState("");
+  const [key, setKey] = useState("");
+  const [pasted, setPasted] = useState("");
   const [qrFile, setQrFile] = useState<File | null>(null);
   const [scanning, setScanning] = useState(false);
-  const [recoveryText, setRecoveryText] = useState("");
   const [busy, setBusy] = useState(false);
   const [linkedRecoveryBusy, setLinkedRecoveryBusy] = useState(false);
   const [progress, setProgress] = useState<string | null>(null);
@@ -60,115 +63,45 @@ export default function RecoveryPage() {
     [],
   );
 
-  const canRecover = useMemo(
-    () => !busy && recoveryText.trim().length > 0,
-    [busy, recoveryText],
-  );
-
-  const loadRecovery = useCallback(async (file: File | null) => {
-    setRecoveryFile(file);
-    setQrFile(null);
-    cancelRecovery();
-    setError(null);
-    setProgress(null);
-    if (file) {
-      const text = await file.text();
-      try {
-        parseRecovery(text);
-        setRecoveryText(text);
-      } catch (e) {
-        setRecoveryText("");
-        setError(e instanceof Error ? e.message : String(e));
-      }
-    } else {
-      setRecoveryText("");
-    }
-  }, [cancelRecovery]);
-
-  const loadQrRecovery = useCallback(async (file: File | null) => {
-    setQrFile(file);
-    setRecoveryFile(null);
-    cancelRecovery();
-    setError(null);
-    setRecoveryText("");
-    if (!file) return;
-
-    setProgress("Reading QR recovery image...");
-    try {
-      setRecoveryText(await decodeRecoveryQrImage(file));
-      setProgress("QR recovery data loaded and validated.");
-    } catch (e) {
-      setProgress(null);
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }, [cancelRecovery]);
-
-  const handleScannedQr = useCallback((text: string) => {
-    setScanning(false);
-    setQrFile(null);
-    setRecoveryFile(null);
-    cancelRecovery();
-    setError(null);
-    setRecoveryText(text);
-    setProgress("QR recovery data loaded and validated.");
-  }, [cancelRecovery]);
-
-  const recoverFromText = useCallback(
-    async (text: string, fromLinkedQr = false) => {
-      if (!text.trim()) return;
-
+  /**
+   * The one recovery path. A recovery link, a scan, an imported QR, a pasted
+   * Copy Recovery block and the two fields below all arrive here as a CID and
+   * a Recovery Key; nothing decrypts anywhere else, so no entry method can
+   * end up on a cryptographic path of its own.
+   */
+  const startRecovery = useCallback(
+    async (details: RecoveryDetails, fromLink = false) => {
       const attempt = recoveryAttemptRef.current + 1;
       recoveryAttemptRef.current = attempt;
+      const isCurrent = () => recoveryAttemptRef.current === attempt;
+
       setBusy(true);
-      setLinkedRecoveryBusy(fromLinkedQr);
+      setLinkedRecoveryBusy(fromLink);
       setError(null);
       setDiagnostics([]);
       clearResult();
-      setProgress("Reading recovery file...");
 
       try {
-        const recovery = parseRecovery(text);
-
-        setProgress("Downloading encrypted blob from Bulletin...");
-        const storedBlob = await fetchBlobByCid(recovery.cid, {
-          blockNumber: recovery.chain?.blockNumber,
-          extrinsicIndex: recovery.chain?.extrinsicIndex,
-          size: recovery.blobSize,
+        const recovered = await recoverFile(details.cid, details.key, {
+          onProgress: (message) => {
+            if (isCurrent()) setProgress(message);
+          },
           onDiagnostic: (message) => {
-            if (recoveryAttemptRef.current === attempt) {
-              setDiagnostics((current) => [...current, message]);
-            }
+            if (isCurrent()) setDiagnostics((current) => [...current, message]);
           },
         });
-        if (recoveryAttemptRef.current !== attempt) return;
-        const decoded = decodeBlob(storedBlob);
+        if (!isCurrent()) return;
 
-        setProgress("Decrypting document locally...");
-        const plain = await aesGcmDecrypt(
-          base64ToBytes(recovery.key),
-          base64ToBytes(decoded.header.iv),
-          decoded.ciphertext,
-        );
-        if (recoveryAttemptRef.current !== attempt) return;
-        const inner = decodeInner(plain);
-
-        const objectUrl = createDocumentUrl(inner.meta, inner.content);
+        const objectUrl = createDocumentUrl(recovered.meta, recovered.content);
         resultUrlRef.current = objectUrl;
-        setResult({
-          meta: inner.meta,
-          content: inner.content,
-          objectUrl,
-        });
-        setProgress(
-          "Document recovered. Review the preview before downloading.",
-        );
+        setResult({ ...recovered, objectUrl });
+        setProgress("File recovered. Review the preview before downloading.");
       } catch (e) {
-        if (recoveryAttemptRef.current === attempt) {
-          setProgress(null);
-          setError(e instanceof Error ? e.message : String(e));
-        }
+        if (!isCurrent()) return;
+        setProgress(null);
+        setError(e instanceof Error ? e.message : String(e));
       } finally {
-        if (recoveryAttemptRef.current === attempt) {
+        if (isCurrent()) {
           setBusy(false);
           setLinkedRecoveryBusy(false);
         }
@@ -177,37 +110,112 @@ export default function RecoveryPage() {
     [clearResult],
   );
 
+  /** Fills both fields from one scanned, imported, or linked code. */
+  const applyDetails = useCallback(
+    (details: RecoveryDetails, fromLink = false) => {
+      setCid(details.cid);
+      setKey(details.key);
+      setError(null);
+      void startRecovery(details, fromLink);
+    },
+    [startRecovery],
+  );
+
   const recover = useCallback(() => {
-    void recoverFromText(recoveryText);
-  }, [recoverFromText, recoveryText]);
+    try {
+      const details = normalizeRecoveryDetails({ cid, key });
+      setCid(details.cid);
+      setKey(details.key);
+      void startRecovery(details);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, [cid, key, startRecovery]);
+
+  /**
+   * Anything pasted whole: the two lines Copy Recovery writes, a recovery
+   * link, or a recovery document from before the Recovery Key change. It only
+   * fills the fields; the user still presses Recover File.
+   */
+  const readPasted = useCallback((value: string) => {
+    setPasted(value);
+    setError(null);
+    setProgress(null);
+    if (!value.trim()) return;
+    try {
+      const details = parseRecoveryInput(value);
+      setCid(details.cid);
+      setKey(details.key);
+      setProgress("CID and Recovery Key read from the pasted text.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
+  const loadQrRecovery = useCallback(
+    async (file: File | null) => {
+      setQrFile(file);
+      cancelRecovery();
+      setError(null);
+      if (!file) return;
+
+      setProgress("Reading the recovery QR image...");
+      try {
+        applyDetails(await decodeRecoveryQrImage(file));
+      } catch (e) {
+        setProgress(null);
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [applyDetails, cancelRecovery],
+  );
+
+  const handleScannedQr = useCallback(
+    (details: RecoveryDetails) => {
+      setScanning(false);
+      setQrFile(null);
+      cancelRecovery();
+      applyDetails(details);
+    },
+    [applyDetails, cancelRecovery],
+  );
 
   useEffect(() => {
-    const loadRecoveryFromHash = () => {
-      if (!window.location.hash) return;
+    const loadRecoveryFromUrl = () => {
+      const url = new URL(window.location.href);
+      const linkedKey = new URLSearchParams(url.hash.replace(/^#/, "")).get(
+        "key",
+      );
 
-      const params = new URLSearchParams(window.location.hash.slice(1));
-      const linkedRecovery = params.get("recovery");
-      if (!linkedRecovery) return;
+      let details: RecoveryDetails | null = null;
+      try {
+        details = linkedKey
+          ? normalizeRecoveryDetails({
+              cid: url.searchParams.get("cid") ?? "",
+              key: linkedKey,
+            })
+          : parseLegacyRecoveryLink(url);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        return;
+      }
+      if (!details) return;
 
-      setRecoveryText(linkedRecovery);
-      setRecoveryFile(null);
-      setQrFile(null);
-      setError(null);
-
-      // Remove the recovery key from the visible URL and browser history before
-      // retrieving the encrypted file. URL fragments are not sent to the host.
+      // Take the Recovery Key out of the visible URL and out of browser
+      // history before anything is fetched. The fragment never reached a
+      // server; this keeps it from being read off the address bar either.
       window.history.replaceState(
         null,
         "",
         `${window.location.pathname}${window.location.search}`,
       );
-      void recoverFromText(linkedRecovery, true);
+      applyDetails(details, true);
     };
 
-    loadRecoveryFromHash();
-    window.addEventListener("hashchange", loadRecoveryFromHash);
-    return () => window.removeEventListener("hashchange", loadRecoveryFromHash);
-  }, [recoverFromText]);
+    loadRecoveryFromUrl();
+    window.addEventListener("hashchange", loadRecoveryFromUrl);
+    return () => window.removeEventListener("hashchange", loadRecoveryFromUrl);
+  }, [applyDetails]);
 
   const kind = result ? documentPreviewKind(result) : "unavailable";
   const textPreview =
@@ -234,25 +242,64 @@ export default function RecoveryPage() {
   return (
     <main className="shell drops-page">
       <Nav />
-      <h1 className="app-title">Recover a document from saved recovery data.</h1>
+      <h1 className="app-title">
+        Recover a file with its Bulletin CID and Recovery Key.
+      </h1>
 
       <section className="actions">
-        <h2 className="input-heading">Upload recovery.json</h2>
-        <div className="file-drop">
-          <input
-            id="recovery-upload"
-            className="file-input"
-            type="file"
-            accept="application/json,.json"
-            onChange={(event) => loadRecovery(event.target.files?.[0] ?? null)}
-          />
-          <label className="file-drop-label" htmlFor="recovery-upload">
-            <span>
-              {recoveryFile ? recoveryFile.name : "Drop the recovery file"}
-            </span>
-            <small>Use the private .recovery.json artifact.</small>
+        <h2 className="input-heading">Enter recovery information</h2>
+        <div className="recover-form">
+          <label>
+            Bulletin CID
+            <input
+              type="text"
+              value={cid}
+              spellCheck={false}
+              autoComplete="off"
+              placeholder="bafk..."
+              onChange={(event) => {
+                setCid(event.target.value);
+                cancelRecovery();
+                setError(null);
+              }}
+            />
+          </label>
+          <label>
+            Recovery Key
+            <input
+              type="text"
+              value={key}
+              spellCheck={false}
+              autoComplete="off"
+              placeholder="the 256-bit key from the upload screen"
+              onChange={(event) => {
+                setKey(event.target.value);
+                cancelRecovery();
+                setError(null);
+              }}
+            />
           </label>
         </div>
+        <button
+          className="btn btn-pink"
+          type="button"
+          onClick={recover}
+          disabled={busy || !cid.trim() || !key.trim()}
+        >
+          {busy ? "Recovering..." : "Recover File"}
+        </button>
+
+        <div className="input-divider">
+          <span>or</span>
+        </div>
+        <h2 className="input-heading">Paste copied recovery</h2>
+        <textarea
+          className="json-input"
+          aria-label="Copied recovery information"
+          placeholder={"CID: bafk...\nRecovery Key: ..."}
+          value={pasted}
+          onChange={(event) => readPasted(event.target.value)}
+        />
 
         <div className="input-divider">
           <span>or</span>
@@ -272,7 +319,7 @@ export default function RecoveryPage() {
             <span>
               {qrFile ? qrFile.name : "Choose a QR image or screenshot"}
             </span>
-            <small>The QR must contain valid SoverStore recovery data.</small>
+            <small>The QR must be a SoverStore recovery code.</small>
           </label>
         </div>
 
@@ -302,33 +349,6 @@ export default function RecoveryPage() {
           </>
         )}
 
-        <div className="input-divider">
-          <span>or</span>
-        </div>
-        <h2 className="input-heading">Paste recovery data</h2>
-        <textarea
-          className="json-input"
-          aria-label="Recovery JSON"
-          placeholder='{"format":"proofbox/recovery@1","cid":"...","key":"..."}'
-          value={recoveryText}
-          onChange={(event) => {
-            setRecoveryText(event.target.value);
-            setRecoveryFile(null);
-            setQrFile(null);
-            cancelRecovery();
-            setError(null);
-            setProgress(null);
-          }}
-        />
-
-        <button
-          className="btn btn-pink"
-          onClick={recover}
-          disabled={!canRecover}
-        >
-          {busy ? "Recovering..." : "Recover & preview"}
-        </button>
-
         {progress && (
           <p className="progress" role="status">
             {progress}
@@ -345,7 +365,7 @@ export default function RecoveryPage() {
         <div className={`stamp ${result ? "inked" : "hollow"}`}>
           {result ? "Recovered" : "Recovery"}
         </div>
-        <div className="voucher-eyebrow">Document recovery</div>
+        <div className="voucher-eyebrow">File recovery</div>
         {result ? (
           <div className="result-grid">
             <span>Name</span>
@@ -357,7 +377,9 @@ export default function RecoveryPage() {
           </div>
         ) : (
           <p className="result-summary">
-            Load recovery data to decrypt and preview the original document.
+            Bulletin holds the encrypted file, and anyone may download it. The
+            Recovery Key is the only thing that opens it, and it never leaves
+            this browser.
           </p>
         )}
         {result && (
@@ -423,15 +445,20 @@ export default function RecoveryPage() {
               className="btn btn-ghost preview-download desktop-file-action"
               type="button"
               onClick={() => {
-                void downloadRecoveryQrCard(
-                  result.meta.name.replace(/\.[^/.]+$/, "") || "recovery",
-                  parseRecovery(recoveryText),
-                ).catch((e) =>
-                  setError(e instanceof Error ? e.message : String(e)),
-                );
+                setError(null);
+                try {
+                  void downloadRecoveryQrCard(
+                    result.meta.name.replace(/\.[^/.]+$/, "") || "recovery",
+                    normalizeRecoveryDetails({ cid, key }),
+                  ).catch((e) =>
+                    setError(e instanceof Error ? e.message : String(e)),
+                  );
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : String(e));
+                }
               }}
             >
-              Download browser recovery QR
+              Save recovery QR
             </button>
             <p className="preview-safety-note">
               Preview does not guarantee that a file is malware-free. Download
@@ -440,8 +467,8 @@ export default function RecoveryPage() {
           </div>
         )}
         <p className="warning">
-          Recovery data contains the CID and decryption key. Keep JSON and QR
-          copies private.
+          A Recovery Key, and any QR code carrying one, opens the file for
+          whoever holds it. Keep both private.
         </p>
       </section>
     </main>

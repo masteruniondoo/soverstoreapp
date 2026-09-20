@@ -1792,15 +1792,49 @@ code {
   margin-top: 20px;
 }
 
-/* Shown when a download cannot be relied on: the gateway sandboxes this app
-   without allow-downloads, so the recovery has to be readable and copyable. */
-.recovery-artifacts {
-  margin-top: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+/* The Recovery Key is the only copy in existence until the user takes it, so
+   it is shown in full, in the same monospace the CID uses. */
+.recovery-key-value {
+  overflow-wrap: anywhere;
+  word-break: break-all;
 }
 
+/* The two manual recovery fields. */
+.recover-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+  width: 100%;
+}
+
+.recover-form label {
+  color: var(--ink-60);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.recover-form input {
+  display: block;
+  width: 100%;
+  margin-top: 7px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+@media (max-width: 720px) {
+  .recover-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Shown when a download cannot be relied on: the gateway sandboxes this app
+   without allow-downloads, so the recovery has to be readable and copyable. */
 .recovery-qr-image {
   width: 256px;
   max-width: 100%;
@@ -1813,6 +1847,7 @@ code {
 
 .recovery-text {
   width: 100%;
+  margin-top: 16px;
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;

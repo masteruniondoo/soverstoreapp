@@ -6,7 +6,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "SoverStore - Bulletin storage",
   description:
-    "Encrypt a file locally, upload it to decentralized storage, and recover it with a recovery file.",
+    "Encrypt a file locally, upload it to decentralized storage, and recover it with its Recovery Key.",
   openGraph: {
     title: "Open a SoverStore Drop",
     description: "Open this encrypted Drop in the Polkadot App.",

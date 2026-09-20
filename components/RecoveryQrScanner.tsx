@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import type { RecoveryDetails } from "@/lib/artifacts/recovery";
 import { tryDecodeRecoveryQrFrame } from "@/lib/artifacts/recovery-qr";
 
 export function RecoveryQrScanner({
   onDecoded,
   onClose,
 }: {
-  onDecoded: (text: string) => void;
+  onDecoded: (recovery: RecoveryDetails) => void;
   onClose: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);

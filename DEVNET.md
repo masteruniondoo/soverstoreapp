@@ -334,9 +334,10 @@ Verification checklist:
 1. The host wallet connects.
 2. The application reports Products Devnet Bulletin.
 3. An authorized account can upload a small encrypted file.
-4. The generated JSON recovery file restores the original file.
-5. The generated QR recovery image opens the Devnet recovery route and restores
-   the original file.
+4. The CID and Recovery Key shown after upload restore the original file on
+   `/recovery/`.
+5. The recovery QR opens the Devnet recovery route and restores the original
+   file. The Recovery Key must appear only after `#` in the scanned URL.
 
 ## Endpoint overrides
 

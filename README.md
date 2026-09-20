@@ -2,7 +2,7 @@
 
 SoverStore is a client-side application for encrypting files locally, storing
 the encrypted data on Products Devnet Bulletin, and recovering it with a
-private recovery file or QR image.
+256-bit Recovery Key that never leaves the browser.
 
 This repository is a Devnet-only project. It produces a static application
 bundle for the Polkadot application gateway and contains no alternative hosting
@@ -14,8 +14,9 @@ profile.
 - AES-256-GCM encryption and decryption happen in the user's browser.
 - `@parity/product-sdk` connects the host wallet to Products Devnet Bulletin.
 - Only encrypted data is uploaded.
-- Recovery JSON and QR artifacts contain the decryption key and must remain
-  private.
+- Each file gets its own random 256-bit Recovery Key, which is the AES key
+  itself. It is never uploaded; the user keeps the CID and the key, or the
+  recovery QR that carries both.
 - The application bundle is published under `soverstore.dot` and served from
   `https://soverstore.dev-dot.li`.
 

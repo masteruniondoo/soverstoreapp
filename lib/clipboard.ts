@@ -74,3 +74,51 @@ function copyViaSelection(text: string): boolean {
     carrier.remove();
   }
 }
+
+/**
+ * Copying an image, for `Copy QR Code`.
+ *
+ * `ClipboardItem` is the only way to put a picture on the clipboard, and it
+ * is missing or blocked in more places than `writeText` is: older browsers
+ * expose no constructor at all, and the gateway's sandbox can deny the write
+ * even where it exists. There is no `execCommand` equivalent to fall back on,
+ * so this reports failure instead and the caller copies the recovery link
+ * text - which is exactly what the QR encodes anyway.
+ */
+export type ImageClipboardPaths = {
+  /** The async clipboard write, or null where the browser exposes none. */
+  write: ((items: unknown[]) => Promise<void>) | null;
+  /** Wraps a blob in a `ClipboardItem`, or null where there is no constructor. */
+  createItem: ((type: string, blob: Blob) => unknown) | null;
+};
+
+function browserImagePaths(): ImageClipboardPaths {
+  const clipboard =
+    typeof navigator !== "undefined" ? navigator.clipboard : undefined;
+  const hasItem =
+    typeof globalThis !== "undefined" &&
+    typeof (globalThis as { ClipboardItem?: unknown }).ClipboardItem ===
+      "function";
+  return {
+    write: clipboard?.write
+      ? (items) => clipboard.write(items as ClipboardItem[])
+      : null,
+    createItem: hasItem
+      ? (type, blob) => new ClipboardItem({ [type]: blob })
+      : null,
+  };
+}
+
+export async function copyImage(
+  blob: Blob,
+  paths: ImageClipboardPaths = browserImagePaths(),
+): Promise<boolean> {
+  if (!paths.write || !paths.createItem) return false;
+  try {
+    await paths.write([paths.createItem(blob.type || "image/png", blob)]);
+    return true;
+  } catch {
+    // No image clipboard support here, or the write was denied.
+    return false;
+  }
+}

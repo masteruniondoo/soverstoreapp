@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { copyText } from "../lib/clipboard.ts";
+import { copyImage, copyText } from "../lib/clipboard.ts";
 
 function paths({ writeText = null, legacyCopy = () => true } = {}) {
   const calls = { writeText: 0, legacy: 0, copied: null };
@@ -51,4 +51,53 @@ test("when both paths fail the caller is told, not reassured", async () => {
     legacyCopy: () => false,
   });
   assert.equal(await copyText("secret", env.paths), false);
+});
+
+/**
+ * `Copy QR Code` copies a picture when it can. There is no `execCommand`
+ * equivalent for images, so the only honest answer where it cannot is false -
+ * the button then copies the recovery link instead.
+ */
+function imagePaths({ write = null, createItem = (type, blob) => ({ type, blob }) } = {}) {
+  const calls = { write: 0, created: [] };
+  return {
+    calls,
+    paths: {
+      write: write === null ? null : (items) => {
+        calls.write += 1;
+        return write(items);
+      },
+      createItem: createItem === null ? null : (type, blob) => {
+        calls.created.push(type);
+        return createItem(type, blob);
+      },
+    },
+  };
+}
+
+const PNG = new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], {
+  type: "image/png",
+});
+
+test("the QR image reaches the clipboard where the browser allows it", async () => {
+  const env = imagePaths({ write: async () => {} });
+  assert.equal(await copyImage(PNG, env.paths), true);
+  assert.equal(env.calls.write, 1);
+  assert.deepEqual(env.calls.created, ["image/png"]);
+});
+
+test("a browser with no image clipboard reports failure instead of pretending", async () => {
+  assert.equal(await copyImage(PNG, imagePaths({ write: null }).paths), false);
+  assert.equal(
+    await copyImage(PNG, imagePaths({ createItem: null }).paths),
+    false,
+  );
+});
+
+test("a denied image write is reported, so the caller can copy the link", async () => {
+  const env = imagePaths({
+    write: async () => { throw new DOMException("denied", "NotAllowedError"); },
+  });
+  assert.equal(await copyImage(PNG, env.paths), false);
+  assert.equal(env.calls.write, 1);
 });

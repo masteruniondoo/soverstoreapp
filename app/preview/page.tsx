@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { parseRecovery } from "@/lib/artifacts/recovery";
-import { decodeBlob, decodeInner } from "@/lib/blob/format";
-import { fetchBlobByCid } from "@/lib/bulletin/retrieve";
-import { aesGcmDecrypt } from "@/lib/crypto/aes";
-import { base64ToBytes } from "@/lib/crypto/hash";
+import {
+  normalizeRecoveryDetails,
+  type RecoveryDetails,
+} from "@/lib/artifacts/recovery";
+import { parseLegacyRecoveryLink } from "@/lib/artifacts/recovery-legacy";
+import { recoverFile } from "@/lib/recovery/recover-file";
 import {
   createDocumentUrl,
   documentPreviewKind,
@@ -25,7 +26,8 @@ export default function PreviewPage() {
   const [diagnostics, setDiagnostics] = useState<string[]>([]);
   const [result, setResult] = useState<RecoveredDocument | null>(null);
   const resultUrlRef = useRef<string | null>(null);
-  const recoveryTextRef = useRef<string | null>(null);
+  // Held only to power Retry. It is never rendered and never logged.
+  const recoveryRef = useRef<RecoveryDetails | null>(null);
   const recoveryAttemptRef = useRef(0);
   const recoveryLinkHandledRef = useRef(false);
   const mountedRef = useRef(true);
@@ -38,97 +40,89 @@ export default function PreviewPage() {
     setResult(null);
   }, []);
 
-  const recoverFromText = useCallback(
-    async (text: string) => {
+  const startRecovery = useCallback(
+    async (details: RecoveryDetails) => {
       const attempt = recoveryAttemptRef.current + 1;
       recoveryAttemptRef.current = attempt;
+      const isCurrent = () =>
+        mountedRef.current && recoveryAttemptRef.current === attempt;
+
       clearResult();
-      recoveryTextRef.current = text;
+      recoveryRef.current = details;
       setErrorMessage(null);
       setDiagnostics([]);
       setStatus("loading");
 
       try {
-        const recovery = parseRecovery(text);
-        const storedBlob = await fetchBlobByCid(recovery.cid, {
-          blockNumber: recovery.chain?.blockNumber,
-          extrinsicIndex: recovery.chain?.extrinsicIndex,
-          size: recovery.blobSize,
+        const recovered = await recoverFile(details.cid, details.key, {
           onDiagnostic: (message) => {
             if (mountedRef.current) {
               setDiagnostics((current) => [...current, message]);
             }
           },
         });
-        if (
-          !mountedRef.current ||
-          recoveryAttemptRef.current !== attempt
-        ) {
-          return;
-        }
+        if (!isCurrent()) return;
 
-        const decoded = decodeBlob(storedBlob);
-        const plain = await aesGcmDecrypt(
-          base64ToBytes(recovery.key),
-          base64ToBytes(decoded.header.iv),
-          decoded.ciphertext,
-        );
-        if (
-          !mountedRef.current ||
-          recoveryAttemptRef.current !== attempt
-        ) {
-          return;
-        }
-
-        const inner = decodeInner(plain);
-        const objectUrl = createDocumentUrl(inner.meta, inner.content);
+        const objectUrl = createDocumentUrl(recovered.meta, recovered.content);
         resultUrlRef.current = objectUrl;
-        setResult({
-          meta: inner.meta,
-          content: inner.content,
-          objectUrl,
-        });
+        setResult({ ...recovered, objectUrl });
         setStatus("ready");
       } catch (error) {
-        if (mountedRef.current && recoveryAttemptRef.current === attempt) {
-          clearResult();
-          setErrorMessage(
-            error instanceof Error ? error.message : String(error),
-          );
-          setStatus("error");
-        }
+        if (!isCurrent()) return;
+        clearResult();
+        setErrorMessage(error instanceof Error ? error.message : String(error));
+        setStatus("error");
       }
     },
     [clearResult],
   );
 
   useEffect(() => {
-    const loadRecoveryFromHash = () => {
-      const params = new URLSearchParams(window.location.hash.slice(1));
-      const linkedRecovery = params.get("recovery");
+    const loadRecoveryFromUrl = () => {
+      const url = new URL(window.location.href);
+      const linkedKey = new URLSearchParams(url.hash.replace(/^#/, "")).get(
+        "key",
+      );
 
-      if (!linkedRecovery) {
-        if (recoveryLinkHandledRef.current) return;
+      let details: RecoveryDetails | null = null;
+      let failure: string | null = null;
+      try {
+        details = linkedKey
+          ? normalizeRecoveryDetails({
+              cid: url.searchParams.get("cid") ?? "",
+              key: linkedKey,
+            })
+          : parseLegacyRecoveryLink(url);
+      } catch (error) {
+        failure = error instanceof Error ? error.message : String(error);
+      }
+
+      if (!details) {
+        if (recoveryLinkHandledRef.current && !failure) return;
         recoveryAttemptRef.current += 1;
         clearResult();
-        setErrorMessage("The recovery data is missing from the URL.");
+        setErrorMessage(
+          failure ?? "The Recovery Key is missing from the link.",
+        );
         setStatus("error");
         return;
       }
 
       recoveryLinkHandledRef.current = true;
+      // The key travelled in the fragment, so it never reached a server. Drop
+      // it from the address bar and from history before anything is fetched.
       window.history.replaceState(
         null,
         "",
         `${window.location.pathname}${window.location.search}`,
       );
-      void recoverFromText(linkedRecovery);
+      void startRecovery(details);
     };
 
-    loadRecoveryFromHash();
-    window.addEventListener("hashchange", loadRecoveryFromHash);
-    return () => window.removeEventListener("hashchange", loadRecoveryFromHash);
-  }, [clearResult, recoverFromText]);
+    loadRecoveryFromUrl();
+    window.addEventListener("hashchange", loadRecoveryFromUrl);
+    return () => window.removeEventListener("hashchange", loadRecoveryFromUrl);
+  }, [clearResult, startRecovery]);
 
   useEffect(
     () => {
@@ -167,11 +161,11 @@ export default function PreviewPage() {
         {diagnostics.length > 0 && (
           <pre className="preview-diagnostics">{diagnostics.join("\n")}</pre>
         )}
-        {recoveryTextRef.current && (
+        {recoveryRef.current && (
           <button
             className="btn btn-pink"
             type="button"
-            onClick={() => void recoverFromText(recoveryTextRef.current!)}
+            onClick={() => void startRecovery(recoveryRef.current!)}
           >
             Retry recovery
           </button>

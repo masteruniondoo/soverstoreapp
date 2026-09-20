@@ -6,7 +6,7 @@ import { AddressRow } from "@/components/AddressRow";
 import { useAppSession } from "@/components/AppSessionProvider";
 import { BulletinBalanceNotice } from "@/components/BulletinBalanceNotice";
 import { Nav } from "@/components/Nav";
-import { RecoveryArtifacts } from "@/components/RecoveryArtifacts";
+import { UploadSuccess } from "@/components/UploadSuccess";
 import { useAndroidFileNotice } from "@/components/useAndroidFileNotice";
 import PreviewPage from "@/app/preview/page";
 import {
@@ -20,21 +20,12 @@ import {
   type BlobStoreResult,
 } from "@/lib/bulletin";
 import {
-  buildRecovery,
-  downloadRecovery,
-  type RecoveryV1,
+  encodeRecoveryKey,
+  generateRecoveryKey,
+  type RecoveryDetails,
 } from "@/lib/artifacts/recovery";
-import { downloadRecoveryQrCard } from "@/lib/artifacts/recovery-qr";
-import {
-  buildHeader,
-  encodeBlob,
-  encodeInner,
-  estimateBlobSize,
-  MAX_UPLOAD_SIZE,
-  type ProofyInnerMeta,
-} from "@/lib/blob/format";
-import { aesGcmEncrypt } from "@/lib/crypto/aes";
-import { randomBytes } from "@/lib/crypto/random";
+import { estimateBlobSize, MAX_UPLOAD_SIZE } from "@/lib/blob/format";
+import { encryptFileToBlob } from "@/lib/recovery/blob";
 import { formatBytes, formatNumber, shortAddress } from "@/lib/format";
 import { BULLETIN_NETWORK_NAME } from "@/lib/runtime-config";
 import {
@@ -61,7 +52,7 @@ type StorageState =
 
 type StorageResult = {
   store: BlobStoreResult;
-  recovery: RecoveryV1;
+  recovery: RecoveryDetails;
   fileBaseName: string;
   authorAddress: string;
 };
@@ -275,22 +266,21 @@ function StorageHome() {
 
       report(`Reading ${selectedFile.name}...`);
       const fileBytes = new Uint8Array(await selectedFile.arrayBuffer());
-      const key = randomBytes(32);
-      const iv = randomBytes(12);
-
-      const meta: ProofyInnerMeta = {
-        name: selectedFile.name,
-        type: selectedFile.type || "application/octet-stream",
-        size: selectedFile.size,
-        createdAt: new Date().toISOString(),
-      };
+      // This file's own 256-bit Recovery Key, and the only copy of it that
+      // will ever exist. It is the AES-256-GCM key itself: it stays in this
+      // function, goes into no log line and no upload payload, and reaches
+      // the user only through the success card below.
+      const key = generateRecoveryKey();
 
       setStorageState("encrypting");
       report("Encrypting locally...");
-      const inner = encodeInner(meta, fileBytes);
-      const ciphertext = await aesGcmEncrypt(key, iv, inner);
-      const header = buildHeader(iv);
-      const blob = encodeBlob(header, ciphertext);
+      const blob = await encryptFileToBlob({
+        key32: key,
+        bytes: fileBytes,
+        name: selectedFile.name,
+        type: selectedFile.type,
+        size: selectedFile.size,
+      });
 
       if (blob.length > MAX_UPLOAD_SIZE) {
         throw new Error(
@@ -308,13 +298,10 @@ function StorageHome() {
       // is recorded in history and left out of the screen they are now on.
       if (!isCurrentRun()) return;
 
-      const recovery = buildRecovery({
+      const recovery: RecoveryDetails = {
         cid: store.cid,
-        key32: key,
-        blobSize: blob.length,
-        blockNumber: store.blockNumber,
-        extrinsicIndex: store.extrinsicIndex,
-      });
+        key: encodeRecoveryKey(key),
+      };
 
       setResult({
         store,
@@ -333,7 +320,7 @@ function StorageHome() {
         });
       }
       setStorageState("done");
-      report("Uploaded. Download recovery now.");
+      report("Uploaded. Save your Recovery Key now.");
       void refreshAllowance(false, true).catch(() => undefined);
     } catch (e) {
       if (!isCurrentRun()) return;
@@ -371,7 +358,8 @@ function StorageHome() {
       </header>
 
       <h1 className="app-title">
-        Encrypt locally. Upload to decentralized storage. Download recovery.
+        Encrypt locally. Upload to decentralized storage. Keep the Recovery
+        Key.
       </h1>
 
       <section className="rail" aria-label="Connection status">
@@ -593,64 +581,12 @@ function StorageHome() {
       </section>
 
       {result && (
-        <section className="voucher result-card" aria-label="Uploaded file">
-          <div className="punch" aria-hidden />
-          <div className="stamp inked">Finalized</div>
-          <div className="voucher-eyebrow">SoverStore storage upload</div>
-          <div className="result-grid">
-            <span>CID</span>
-            <code>{result.store.cid}</code>
-            <span>Block</span>
-            <code>
-              {result.store.blockNumber != null
-                ? `#${formatNumber(result.store.blockNumber)}`
-                : "recorded"}
-            </code>
-            <span>Author</span>
-            <code title={result.authorAddress}>
-              {shortAddress(result.authorAddress)}
-            </code>
-          </div>
-          <div className="actions-row result-actions">
-            <button
-              className="btn btn-ink"
-              onClick={() =>
-                void downloadRecovery(
-                  result.fileBaseName,
-                  result.recovery,
-                ).catch((e) =>
-                  setError(e instanceof Error ? e.message : String(e)),
-                )
-              }
-            >
-              Download recovery.json
-            </button>
-            <button
-              className="btn btn-ghost"
-              onClick={() =>
-                void downloadRecoveryQrCard(
-                  result.fileBaseName,
-                  result.recovery,
-                ).catch((e) =>
-                  setError(e instanceof Error ? e.message : String(e)),
-                )
-              }
-            >
-              Download QR card
-            </button>
-          </div>
-          <RecoveryArtifacts recovery={result.recovery} />
-          <p className="warning qr-warning">
-            This QR opens the recovery app and previews the document
-            automatically. Keep it private: anyone with the QR can recover the
-            file.
-          </p>
-          <p className="warning">
-            The recovery file is the only way to open the original. SoverStore
-            does not keep a copy of the key. Anyone holding CID + recovery can
-            read the document.
-          </p>
-        </section>
+        <UploadSuccess
+          recovery={result.recovery}
+          fileBaseName={result.fileBaseName}
+          authorAddress={result.authorAddress}
+          blockNumber={result.store.blockNumber}
+        />
       )}
 
       <footer className="foot">
@@ -668,7 +604,9 @@ export default function Home() {
   useEffect(() => {
     const detectRecoveryLink = () => {
       const params = new URLSearchParams(window.location.hash.slice(1));
-      if (params.has("recovery")) setHasRecoveryLink(true);
+      // `key` is the current recovery link; `recovery` is the retired one,
+      // still honoured so QR cards printed before the change keep working.
+      if (params.has("key") || params.has("recovery")) setHasRecoveryLink(true);
     };
 
     detectRecoveryLink();
