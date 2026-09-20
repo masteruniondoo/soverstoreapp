@@ -21,6 +21,23 @@ export const RECOVERY_KEY_BYTES = 32;
 /** The route a recovery link opens. */
 export const RECOVERY_ROUTE = "/recovery/";
 
+/**
+ * Read by the Polkadot host shell, not by this app - which is why it looks
+ * unused from in here, and why removing it once cost a release.
+ *
+ * By default the host resolves a dotNS domain to its content through a light
+ * client running in the browser, which has to sync before it can answer and
+ * keeps its synced view in local storage. A view that lags, or one left over
+ * from before a deploy, resolves the previous bundle: the app opens, looks
+ * fine, and is the old version. `rpc-gateway` asks trusted RPC servers for
+ * current chain state instead.
+ *
+ * A recovery link is exactly where that must not happen. It is opened rarely,
+ * often on a device that has never loaded this app, by someone who needs their
+ * file now.
+ */
+const HOST_CHAIN_BACKEND = "rpc-gateway";
+
 /** The labels `Copy Recovery` writes, and the Recover page reads back. */
 export const CID_LABEL = "CID";
 export const RECOVERY_KEY_LABEL = "Recovery Key";
@@ -158,7 +175,7 @@ export function recoveryUrl(
   origin: string = recoveryAppOrigin(),
 ): string {
   const { cid, key } = normalizeRecoveryDetails(details);
-  const query = new URLSearchParams({ cid });
+  const query = new URLSearchParams({ cid, chainBackend: HOST_CHAIN_BACKEND });
   return `${origin.replace(/\/$/, "")}${RECOVERY_ROUTE}?${query}#key=${encodeURIComponent(key)}`;
 }
 

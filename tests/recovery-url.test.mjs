@@ -72,3 +72,18 @@ test("an explicit origin is honoured, so a deployment is never hardcoded", () =>
   assert.equal(url.origin, "https://example.test");
   assert.equal(url.pathname, RECOVERY_ROUTE);
 });
+
+test("a recovery link pins the host to trusted RPC servers", () => {
+  // Without this the Polkadot host resolves the domain through an in-browser
+  // light client, whose synced view can predate the current deploy - the app
+  // then opens on an older bundle. A recovery link is opened rarely, often on
+  // a device that has never loaded the app; it cannot wait for a sync.
+  const url = new URL(recoveryUrl(DETAILS));
+  assert.equal(url.searchParams.get("chainBackend"), "rpc-gateway");
+  // It is a host parameter, so it belongs in the query, not the fragment.
+  assert.equal(url.hash.includes("chainBackend"), false);
+});
+
+test("the host parameter does not disturb reading the link back", () => {
+  assert.deepEqual(parseRecoveryUrl(recoveryUrl(DETAILS)), DETAILS);
+});
