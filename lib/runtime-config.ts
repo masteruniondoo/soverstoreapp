@@ -1,3 +1,12 @@
+/**
+ * The build's own version, shown in the footer.
+ *
+ * Worth having on screen: the Polkadot host caches a resolved app bundle, so
+ * "is this the build I just published?" is otherwise a question you can only
+ * answer by hunting for a string that happens to have changed.
+ */
+export const APP_VERSION = process.env.NEXT_PUBLIC_APP_VERSION ?? "dev";
+
 export const BULLETIN_NETWORK_NAME =
   process.env.NEXT_PUBLIC_BULLETIN_NETWORK_NAME ??
   "Products Devnet Bulletin";

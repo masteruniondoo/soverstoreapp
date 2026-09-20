@@ -27,7 +27,7 @@ import {
 import { estimateBlobSize, MAX_UPLOAD_SIZE } from "@/lib/blob/format";
 import { encryptFileToBlob } from "@/lib/recovery/blob";
 import { formatBytes, formatNumber, shortAddress } from "@/lib/format";
-import { BULLETIN_NETWORK_NAME } from "@/lib/runtime-config";
+import { APP_VERSION, BULLETIN_NETWORK_NAME } from "@/lib/runtime-config";
 import {
   recoverTimedOutBulletinTransport,
 } from "@/lib/bulletin/recovery";
@@ -593,6 +593,7 @@ function StorageHome() {
         Note: Renewal is not yet implemented in SoverStore. The current
         retention period is 201,600 blocks; retention extension will be added
         in a future version.
+        <span className="foot-version">SoverStore v{APP_VERSION}</span>
       </footer>
     </main>
   );

@@ -2119,6 +2119,17 @@ code {
   font-size: 11.5px;
 }
 
+/* Small enough to stay out of the way, readable enough to answer "which build
+   am I actually looking at?" without opening devtools. */
+.foot-version {
+  display: block;
+  margin-top: 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--ink-30);
+}
+
 /* Responsive & accessibility ------------------------------------------------ */
 
 @media (max-width: 480px) {
